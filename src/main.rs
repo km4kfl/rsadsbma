@@ -203,7 +203,7 @@ enum MessageSpecific {
     Df11,
     Df18,
     Df17,
-    other,
+    Other,
 }
 
 enum MessageErrorReason {
@@ -259,7 +259,7 @@ fn process_result(result: ProcessStreamResult, bit_error_table: &HashMap<u32, u1
             msg: msg,
             ndx: result.ndx,
             snr: result.snr,
-            specific: MessageSpecific::other,
+            specific: MessageSpecific::Other,
         }),
     }
 }
@@ -462,7 +462,7 @@ fn main() {
                                 MessageSpecific::Df11 => { df11total_a += 1; },
                                 MessageSpecific::Df17 => { df17total_a += 1; },
                                 MessageSpecific::Df18 => { df18total_a += 1; },
-                                MessageSpecific::other => { dfothertotal_a += 1; },
+                                MessageSpecific::Other => { dfothertotal_a += 1; },
                             }                            
                         }
                         
@@ -473,7 +473,7 @@ fn main() {
                                 MessageSpecific::Df11 => { df11total_b += 1; },
                                 MessageSpecific::Df17 => { df17total_b += 1; },
                                 MessageSpecific::Df18 => { df18total_b += 1; },
-                                MessageSpecific::other => { dfothertotal_b += 1; },
+                                MessageSpecific::Other => { dfothertotal_b += 1; },
                             }                            
                         }                        
 
@@ -503,13 +503,13 @@ fn main() {
 
                         // Now, `hm` contains a list of final messages that are potentially
                         // unordered. Do some statistical output to validate proof of concept.
-                        for (ndx, message) in hm {
+                        for (_, message) in hm {
                             dftotal += 1;
                             match message.specific {
                                 MessageSpecific::Df11 => { df11total += 1; },
                                 MessageSpecific::Df17 => { df17total += 1; },
                                 MessageSpecific::Df18 => { df18total += 1; },
-                                MessageSpecific::other => { dfothertotal += 1; },
+                                MessageSpecific::Other => { dfothertotal += 1; },
                             }
                         }
                         
