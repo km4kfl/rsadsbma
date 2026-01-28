@@ -123,7 +123,7 @@ fn fix_bit_errors(msg: &mut [u8], bit_error_table: &HashMap<u32, u16>) -> u8 {
                     return 0;
                 }
                 let bitpos0 = a - offset;
-                let bitpos1 = a - offset;
+                let bitpos1 = b - offset;
                 msg[bitpos0 >> 3] = msg[bitpos0 >> 3] ^ (1 << (7 - (bitpos0 & 7)));
                 msg[bitpos1 >> 3] = msg[bitpos1 >> 3] ^ (1 << (7 - (bitpos1 & 7)));
                 2
