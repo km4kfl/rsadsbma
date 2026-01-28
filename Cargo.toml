@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 bytemuck = "1.14"
+clap = { version = "4.5.55", features = ["derive"] }
 rand = "0.8"

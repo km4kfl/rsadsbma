@@ -1,13 +1,21 @@
+//! Proof of concept for ADS-B reception using beamforming of a two antenna system.
+//!
+//! This program was designed for experimentation and testing. It provides limited
+//! value as is. However, it might serve as a solid foundation or at the least an
+//! idea for a future project.
+
 use std::io::Read;
 use std::net::TcpStream;
-use bytemuck::cast_slice;
+use bytemuck::{bytes_of, cast_slice};
 use rand::Rng;
 use std::time::{Duration, Instant};
 use std::thread;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::collections::HashMap;
 use std::result::Result;
-use std::env;
+use clap::Parser;
+use std::fs::File;
+use std::io::prelude::*;
 
 const MODES_PREAMBLE_US: usize =  8;
 const MODES_PREAMBLE_SAMPLES: usize = MODES_PREAMBLE_US * 2;
@@ -128,13 +136,32 @@ fn fix_bit_errors(msg: &mut [u8], bit_error_table: &HashMap<u32, u16>) -> u8 {
     }
 }
 
+/// Represents a message after demodulation but before decoding.
 struct ProcessStreamResult {
     snr: f32,
     msg: Vec<u8>,
+    samples: Vec<i16>,
     ndx: usize,
+    theta: f32,
+    amplitude_a: f32,
+    amplitude_b: f32,
 }
 
-fn process_stream_mfloat32(stream: &[f32]) -> Vec<ProcessStreamResult> {
+/// Demodulates a message using `stream`.
+///
+/// The `i16stream`, `theta`, `amplitude_a`, and `amplitude_b` are simply copied
+/// into the `ProcessStreamResult`. There is some offset magic with multiple of 4
+/// with `i16stream` but nothing major.
+///
+/// The `stream` is expected to be the magnitude of the incoming I/Q stream. Likely,
+/// this function is called after performing the beamforming and combining the two
+/// antenna sample streams into a magnitude stream.
+fn process_stream_mfloat32(
+    stream: &[f32],
+    i16stream: &[i16],
+    theta: f32,
+    amplitude_a: f32,
+    amplitude_b: f32) -> Vec<ProcessStreamResult> {
     let mut results: Vec<ProcessStreamResult> = Vec::new();
 
     for x in 0..stream.len() - MODES_PREAMBLE_SAMPLES - MODES_LONG_MSG_SAMPLES - 1 {
@@ -185,20 +212,41 @@ fn process_stream_mfloat32(stream: &[f32]) -> Vec<ProcessStreamResult> {
         results.push(ProcessStreamResult {
             snr: snr,
             msg: msg,
+            samples: (&i16stream[x * 4..x * 4 + (MODES_PREAMBLE_SAMPLES + MODES_LONG_MSG_SAMPLES) * 4]).to_vec(),
             ndx: x,
+            theta: theta,
+            amplitude_a: amplitude_a,
+            amplitude_b: amplitude_b,
         });
     }
 
     results
 }
 
+/// Represents a message after demodulation and decoding.
 struct Message {
+    /// The bytes that comprise the message after demodulation.
     msg: Vec<u8>,
+    /// The raw I/Q samples.
+    samples: Vec<i16>,
+    /// The sample index the message was found at.
     ndx: usize,
+    /// The signal to noise ratio computed.
     snr: f32,
+    /// The theta used during beamforming.
+    theta: f32,
+    /// The amplitude from antenna A used during beamforming.
+    amplitude_a: f32,
+    /// The amplitude from antenna B used during beamforming.
+    amplitude_b: f32,
+    /// Any data specific to this message. For example, this
+    /// might contain fields specific to a message type.
     specific: MessageSpecific,
 }
 
+/// This is a good place to put anything specific if any
+/// decoding was done on the message. You could put fields
+/// specific to each message type here.
 enum MessageSpecific {
     Df11,
     Df18,
@@ -207,9 +255,11 @@ enum MessageSpecific {
 }
 
 enum MessageErrorReason {
+    /// This happens when the message can not be decoded because of errors.
     BitErrors,
 }
 
+/// Process the stream result and do any decoding that is needed.
 fn process_result(result: ProcessStreamResult, bit_error_table: &HashMap<u32, u16>) -> Result<Message, MessageErrorReason> {
     let mut msg = result.msg;
 
@@ -236,34 +286,64 @@ fn process_result(result: ProcessStreamResult, bit_error_table: &HashMap<u32, u1
         }
     }
 
+    // Here is where you want to do your decoding. I just simply
+    // copied the parameters over and set a marker for each message
+    // type.
+
     match msgtype {
         11 => Ok(Message {
             msg: msg,
             ndx: result.ndx,
             snr: result.snr,
+            theta: result.theta,
+            samples: result.samples,
+            amplitude_a: result.amplitude_a,
+            amplitude_b: result.amplitude_b,
             specific: MessageSpecific::Df11,
         }),
         17 => Ok(Message {
             msg: msg,
             ndx: result.ndx,
             snr: result.snr,
+            theta: result.theta,
+            samples: result.samples,
+            amplitude_a: result.amplitude_a,
+            amplitude_b: result.amplitude_b,        
             specific: MessageSpecific::Df17,
         }),
         18 => Ok(Message {
             msg: msg,
             ndx: result.ndx,
             snr: result.snr,
+            theta: result.theta,
+            samples: result.samples,
+            amplitude_a: result.amplitude_a,
+            amplitude_b: result.amplitude_b,        
             specific: MessageSpecific::Df18,
         }),
         _ => Ok(Message {
             msg: msg,
             ndx: result.ndx,
             snr: result.snr,
+            theta: result.theta,
+            samples: result.samples,
+            amplitude_a: result.amplitude_a,
+            amplitude_b: result.amplitude_b,        
             specific: MessageSpecific::Other,
         }),
     }
 }
 
+/// Does a single beamforming operation on the interleaved two antenna stream.
+///
+/// This function expects that `u8_buffer` is a stream of `i16` values where
+/// the I/Q pairs for the two antennas are interleaved. Such that they are in
+/// the format: ABCDABCDABCDABCD...
+///
+/// Where A is the real value (I) of antenna 1, B is the imaginary value (Q) of
+/// antenna 1, C is the real value (I) of antenna 2, and D is the imaginary value (Q)
+/// of antenna 2. The pattern just continues. Therefore, the function expects
+/// the length to a multiple of 8. However, any odd bytes are just ignored.
 fn process_buffer_single(
     u8_buffer: &[u8],
     bit_error_table: &HashMap<u32, u16>,
@@ -293,7 +373,7 @@ fn process_buffer_single(
         mbuffer.push((ci * ci + cq * cq).sqrt());
     }
 
-    let results = process_stream_mfloat32(&mbuffer);
+    let results = process_stream_mfloat32(&mbuffer, &buffer, theta, amplitude_a, amplitude_b);
 
     let mut out: Vec<Message> = Vec::new();
 
@@ -336,7 +416,7 @@ fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cycle_c
             mbuffer.push((ci * ci + cq * cq).sqrt());
         }
 
-        let results = process_stream_mfloat32(&mbuffer);
+        let results = process_stream_mfloat32(&mbuffer, &buffer, theta, 1.0, amplitude);
 
         for result in results {
             match hm.get(&result.ndx) {
@@ -366,18 +446,43 @@ fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cycle_c
     out
 }
 
-fn main() {
-    println!("Hello, world!");
-
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() != 3 {
-        println!("The arguments to the program are: <thread-count> <cycle-count>");
-        return;
+fn write_message_to_file(file: &mut File, m: &Message) {
+    file.write_all(bytes_of(&(m.msg.len() as u16)));
+    file.write_all(&m.msg);
+    file.write_all(bytes_of(&(m.samples.len() as u16)));
+    for x in 0..m.samples.len() {
+        file.write_all(bytes_of(&m.samples[x]));
     }
+    file.write_all(bytes_of(&m.ndx));
+    file.write_all(bytes_of(&m.snr));
+    file.write_all(bytes_of(&m.theta));
+    file.write_all(bytes_of(&m.amplitude_a));
+    file.write_all(bytes_of(&m.amplitude_b));
+}
 
-    let thread_count: u32 = args[1].parse().unwrap();
-    let cycle_count: u32 = args[2].parse().unwrap();
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Number of threads to use.
+    #[arg(short, long)]
+    thread_count: u32,
+
+    /// Number of cycles per thread.
+    #[arg(short, long)]
+    cycle_count: u32,
+
+    /// A file prefix to write messages.
+    #[arg(short, long)]
+    file_output: Option<String>,
+}
+
+fn main() {
+    let args = Args::parse();
+
+    let thread_count: u32 = args.thread_count;
+    let cycle_count: u32 = args.cycle_count;
+
+    println!("Hello, world!");
 
     println!("Using {} threads and {} cycles.", thread_count, cycle_count);
 
@@ -401,6 +506,13 @@ fn main() {
             }
         });
     }
+
+    let mut file = match args.file_output {
+        Some(v) => {
+            Some(File::create(v).unwrap())
+        },
+        None => None,
+    };
 
     //for rx in &rxs {
     //    rx.recv().unwrap();
@@ -464,6 +576,19 @@ fn main() {
                                 MessageSpecific::Df18 => { df18total_a += 1; },
                                 MessageSpecific::Other => { dfothertotal_a += 1; },
                             }                            
+                            
+                            // Other generates too much because it isn't error checked.
+                            match message.specific {
+                                MessageSpecific::Other => (),
+                                _ => {
+                                    match &mut file {
+                                        None => (),
+                                        Some(file) => {
+                                            write_message_to_file(file, &message);
+                                        },
+                                    }
+                                },
+                            }
                         }
                         
                         // Only turn on antenna B.
@@ -474,6 +599,19 @@ fn main() {
                                 MessageSpecific::Df17 => { df17total_b += 1; },
                                 MessageSpecific::Df18 => { df18total_b += 1; },
                                 MessageSpecific::Other => { dfothertotal_b += 1; },
+                            }
+                            
+                            // Other generates too much because it isn't error checked.
+                            match message.specific {
+                                MessageSpecific::Other => (),
+                                _ => {
+                                    match &mut file {
+                                        None => (),
+                                        Some(file) => {
+                                            write_message_to_file(file, &message);
+                                        },
+                                    }
+                                },
                             }                            
                         }                        
 
@@ -511,6 +649,19 @@ fn main() {
                                 MessageSpecific::Df18 => { df18total += 1; },
                                 MessageSpecific::Other => { dfothertotal += 1; },
                             }
+
+                            // Other generates too much because it isn't error checked.
+                            match message.specific {
+                                MessageSpecific::Other => (),
+                                _ => {
+                                    match &mut file {
+                                        None => (),
+                                        Some(file) => {
+                                            write_message_to_file(file, &message);
+                                        },
+                                    }
+                                },
+                            }                            
                         }
                         
                         if stat_display.elapsed().as_secs() > 5 {
