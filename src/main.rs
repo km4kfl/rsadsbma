@@ -377,7 +377,9 @@ fn main() {
     }
 
     let thread_count: u32 = args[1].parse().unwrap();
-    let cycle_count: u32 = args[1].parse().unwrap();
+    let cycle_count: u32 = args[2].parse().unwrap();
+
+    println!("Using {} threads and {} cycles.", thread_count, cycle_count);
 
     let server_addr = "127.0.0.1:7878";
 
