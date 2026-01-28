@@ -7,6 +7,7 @@ use std::thread;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::collections::HashMap;
 use std::result::Result;
+use std::env;
 
 const MODES_PREAMBLE_US: usize =  8;
 const MODES_PREAMBLE_SAMPLES: usize = MODES_PREAMBLE_US * 2;
@@ -102,8 +103,6 @@ fn fix_bit_errors(msg: &mut [u8], bit_error_table: &HashMap<u32, u16>) -> u8 {
             let a = (pei & 0xff) as usize;
             let b = ((pei >> 8) & 0xff) as usize;
 
-            let bitpos0 = a - offset;
-
             if b != 0 {
                 if offset > a {
                     return 0;
@@ -111,6 +110,7 @@ fn fix_bit_errors(msg: &mut [u8], bit_error_table: &HashMap<u32, u16>) -> u8 {
                 if offset > b {
                     return 0;
                 }
+                let bitpos0 = a - offset;
                 let bitpos1 = a - offset;
                 msg[bitpos0 >> 3] = msg[bitpos0 >> 3] ^ (1 << (7 - (bitpos0 & 7)));
                 msg[bitpos1 >> 3] = msg[bitpos1 >> 3] ^ (1 << (7 - (bitpos1 & 7)));
@@ -118,7 +118,8 @@ fn fix_bit_errors(msg: &mut [u8], bit_error_table: &HashMap<u32, u16>) -> u8 {
             } else {
                 if offset > a {
                     return 0;
-                }                
+                }
+                let bitpos0 = a - offset;
                 msg[bitpos0 >> 3] = msg[bitpos0 >> 3] ^ (1 << (7 - (bitpos0 & 7)));
                 1
             }
@@ -306,13 +307,13 @@ fn process_buffer_single(
     out
 }
 
-fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>) -> Vec<Message> {
+fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cycle_count: u32) -> Vec<Message> {
     let buffer: &[i16] = cast_slice(u8_buffer);
     let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / 4);
     let mut rng = rand::thread_rng();
     let mut hm: HashMap<usize, ProcessStreamResult> = HashMap::new();
 
-    for _ in 0..40 {
+    for _ in 0..cycle_count {
         let theta: f32 = rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI;
         let amplitude: f32 = rng.r#gen();
         let ri = theta.cos();
@@ -368,12 +369,22 @@ fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>) -> Vec<
 fn main() {
     println!("Hello, world!");
 
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() != 3 {
+        println!("The arguments to the program are: <thread-count> <cycle-count>");
+        return;
+    }
+
+    let thread_count: u32 = args[1].parse().unwrap();
+    let cycle_count: u32 = args[1].parse().unwrap();
+
     let server_addr = "127.0.0.1:7878";
 
     let mut txs: Vec<Sender<Vec<u8>>> = Vec::new();
     let mut rxs: Vec<Receiver<Vec<Message>>> = Vec::new();
 
-    for _ in 0..16 {
+    for _ in 0..thread_count {
         let (atx, brx) = channel();
         let (btx, arx) = channel();
         txs.push(atx);
@@ -384,7 +395,7 @@ fn main() {
             let bit_error_table = modes_init_error_info();
             loop {
                 let buffer = brx.recv().unwrap();
-                btx.send(process_buffer(&buffer, &bit_error_table)).unwrap();
+                btx.send(process_buffer(&buffer, &bit_error_table, cycle_count)).unwrap();
             }
         });
     }
