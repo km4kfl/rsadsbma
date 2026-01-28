@@ -3,6 +3,10 @@
 //! This program was designed for experimentation and testing. It provides limited
 //! value as is. However, it might serve as a solid foundation or at the least an
 //! idea for a future project.
+//!
+//! Thanks to Salvatore Sanfilippo <antirez@gmail.com> and https://github.com/antirez/dump1090/
+//! Thanks to Malcolm Robb <support@attavionics.com> and https://github.com/MalcolmRobb/dump1090/
+//! Thanks to https://github.com/flightaware/dump1090
 
 use std::io::Read;
 use std::net::TcpStream;
