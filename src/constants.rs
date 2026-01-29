@@ -1,0 +1,8 @@
+pub const MODES_PREAMBLE_US: usize =  8;
+pub const MODES_PREAMBLE_SAMPLES: usize = MODES_PREAMBLE_US * 2;
+pub const MODES_LONG_MSG_BYTES: usize = 14;
+pub const MODES_SHORT_MSG_BYTES: usize = 7;
+pub const MODES_LONG_MSG_BITS: usize = MODES_LONG_MSG_BYTES * 8;
+pub const MODES_SHORT_MSG_BITS: usize = MODES_SHORT_MSG_BYTES * 8;
+pub const MODES_LONG_MSG_SAMPLES: usize = MODES_LONG_MSG_BITS * 2;
+pub const MODES_SHORT_MSG_SAMPLES: usize = MODES_LONG_MSG_BITS * 2;
