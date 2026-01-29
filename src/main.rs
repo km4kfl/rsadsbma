@@ -119,9 +119,11 @@ fn fix_bit_errors(msg: &mut [u8], bit_error_table: &HashMap<u32, u16>) -> u8 {
                 if offset > a {
                     return 0;
                 }
+                
                 if offset > b {
                     return 0;
                 }
+
                 let bitpos0 = a - offset;
                 let bitpos1 = b - offset;
                 msg[bitpos0 >> 3] = msg[bitpos0 >> 3] ^ (1 << (7 - (bitpos0 & 7)));
@@ -399,14 +401,26 @@ fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cycle_c
 
     for _ in 0..cycle_count {
         let theta: f32 = rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI;
-        let amplitude: f32 = rng.r#gen();
+        let amplitude: f32 = rng.r#gen::<f32>() * 2.0;
+        let amplitude_a: f32;
+        let amplitude_b: f32;
+
+        // Do not favor either antenna.
+        if amplitude >= 1.0 {
+            amplitude_a = 1.0;
+            amplitude_b = amplitude - 1.0;
+        } else {
+            amplitude_b = 1.0;
+            amplitude_a = amplitude;
+        }
+
         let ri = theta.cos();
         let rq = theta.sin();
         for x in 0..buffer.len() / 4 {
-            let ai: f32 = buffer[x*4+0] as f32 / 2049.0;
-            let aq: f32 = buffer[x*4+1] as f32 / 2049.0;
-            let bi: f32 = buffer[x*4+2] as f32 / 2049.0 * amplitude;
-            let bq: f32 = buffer[x*4+3] as f32 / 2049.0 * amplitude;
+            let ai: f32 = buffer[x*4+0] as f32 / 2049.0 * amplitude_a;
+            let aq: f32 = buffer[x*4+1] as f32 / 2049.0 * amplitude_a;
+            let bi: f32 = buffer[x*4+2] as f32 / 2049.0 * amplitude_b;
+            let bq: f32 = buffer[x*4+3] as f32 / 2049.0 * amplitude_b;
             // multiply two complex numbers
             // a = bi
             // b = bq
@@ -420,7 +434,7 @@ fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cycle_c
             mbuffer.push((ci * ci + cq * cq).sqrt());
         }
 
-        let results = process_stream_mfloat32(&mbuffer, &buffer, theta, 1.0, amplitude);
+        let results = process_stream_mfloat32(&mbuffer, &buffer, theta, amplitude_a, amplitude_b);
 
         for result in results {
             match hm.get(&result.ndx) {
@@ -451,17 +465,17 @@ fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cycle_c
 }
 
 fn write_message_to_file(file: &mut File, m: &Message) {
-    file.write_all(bytes_of(&(m.msg.len() as u16)));
-    file.write_all(&m.msg);
-    file.write_all(bytes_of(&(m.samples.len() as u16)));
+    file.write_all(bytes_of(&(m.msg.len() as u16))).unwrap();
+    file.write_all(&m.msg).unwrap();
+    file.write_all(bytes_of(&(m.samples.len() as u16))).unwrap();
     for x in 0..m.samples.len() {
-        file.write_all(bytes_of(&m.samples[x]));
+        file.write_all(bytes_of(&m.samples[x])).unwrap();
     }
-    file.write_all(bytes_of(&m.ndx));
-    file.write_all(bytes_of(&m.snr));
-    file.write_all(bytes_of(&m.theta));
-    file.write_all(bytes_of(&m.amplitude_a));
-    file.write_all(bytes_of(&m.amplitude_b));
+    file.write_all(bytes_of(&m.ndx)).unwrap();
+    file.write_all(bytes_of(&m.snr)).unwrap();
+    file.write_all(bytes_of(&m.theta)).unwrap();
+    file.write_all(bytes_of(&m.amplitude_a)).unwrap();
+    file.write_all(bytes_of(&m.amplitude_b)).unwrap();
 }
 
 #[derive(Parser, Debug)]
@@ -572,52 +586,60 @@ fn main() {
 
                         // While we wait for the threads to finished process the buffer and only
                         // turn on antenna A.
-                        for message in process_buffer_single(&buffer, &bit_error_table, 0.0, 1.0, 0.0) {
-                            dftotal_a += 1;
-                            match message.specific {
-                                MessageSpecific::Df11 => { df11total_a += 1; },
-                                MessageSpecific::Df17 => { df17total_a += 1; },
-                                MessageSpecific::Df18 => { df18total_a += 1; },
-                                MessageSpecific::Other => { dfothertotal_a += 1; },
-                            }                            
-                            
-                            // Other generates too much because it isn't error checked.
-                            match message.specific {
-                                MessageSpecific::Other => (),
-                                _ => {
-                                    match &mut file {
-                                        None => (),
-                                        Some(file) => {
-                                            write_message_to_file(file, &message);
-                                        },
-                                    }
-                                },
+                        {
+                            let mut items = process_buffer_single(&buffer, &bit_error_table, 0.0, 1.0, 0.0);
+                            items.sort_by(|a, b| (&a.ndx).cmp(&b.ndx));
+                            for message in items {
+                                dftotal_a += 1;
+                                match message.specific {
+                                    MessageSpecific::Df11 => { df11total_a += 1; },
+                                    MessageSpecific::Df17 => { df17total_a += 1; },
+                                    MessageSpecific::Df18 => { df18total_a += 1; },
+                                    MessageSpecific::Other => { dfothertotal_a += 1; },
+                                }                            
+                                
+                                // Other generates too much because it isn't error checked.
+                                match message.specific {
+                                    MessageSpecific::Other => (),
+                                    _ => {
+                                        match &mut file {
+                                            None => (),
+                                            Some(file) => {
+                                                write_message_to_file(file, &message);
+                                            },
+                                        }
+                                    },
+                                }
                             }
                         }
-                        
-                        // Only turn on antenna B.
-                        for message in process_buffer_single(&buffer, &bit_error_table, 0.0, 0.0, 1.0) {
-                            dftotal_b += 1;
-                            match message.specific {
-                                MessageSpecific::Df11 => { df11total_b += 1; },
-                                MessageSpecific::Df17 => { df17total_b += 1; },
-                                MessageSpecific::Df18 => { df18total_b += 1; },
-                                MessageSpecific::Other => { dfothertotal_b += 1; },
-                            }
-                            
-                            // Other generates too much because it isn't error checked.
-                            match message.specific {
-                                MessageSpecific::Other => (),
-                                _ => {
-                                    match &mut file {
-                                        None => (),
-                                        Some(file) => {
-                                            write_message_to_file(file, &message);
-                                        },
-                                    }
-                                },
-                            }                            
-                        }                        
+
+                        {
+                            let mut items = process_buffer_single(&buffer, &bit_error_table, 0.0, 0.0, 1.0);
+                            items.sort_by(|a, b| (&a.ndx).cmp(&b.ndx));
+                            // Only turn on antenna B.
+                            for message in items {
+                                dftotal_b += 1;
+                                match message.specific {
+                                    MessageSpecific::Df11 => { df11total_b += 1; },
+                                    MessageSpecific::Df17 => { df17total_b += 1; },
+                                    MessageSpecific::Df18 => { df18total_b += 1; },
+                                    MessageSpecific::Other => { dfothertotal_b += 1; },
+                                }
+                                
+                                // Other generates too much because it isn't error checked.
+                                match message.specific {
+                                    MessageSpecific::Other => (),
+                                    _ => {
+                                        match &mut file {
+                                            None => (),
+                                            Some(file) => {
+                                                write_message_to_file(file, &message);
+                                            },
+                                        }
+                                    },
+                                }                            
+                            }                        
+                        }
 
                         //println!("getting data from threads");
                         for rx in &rxs {
@@ -643,9 +665,12 @@ fn main() {
                             }
                         }
 
+                        let mut items: Vec<(usize, Message)> = hm.into_iter().collect();
+                        items.sort_by(|a, b| (&a.0).cmp(&b.0));
+
                         // Now, `hm` contains a list of final messages that are potentially
                         // unordered. Do some statistical output to validate proof of concept.
-                        for (_, message) in hm {
+                        for (_, message) in items {
                             dftotal += 1;
                             match message.specific {
                                 MessageSpecific::Df11 => { df11total += 1; },
