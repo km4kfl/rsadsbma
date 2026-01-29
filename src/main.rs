@@ -487,8 +487,15 @@ fn main() {
                             // Other generates too much because it isn't error checked.
                             match message.specific {
                                 MessageSpecific::Other => (),
-                                _ => {
+                                MessageSpecific::AircraftIdenAndCat {
+                                    hdr: _,
+                                    aircraft_type: _,
+                                    flight: _,
+                                } => {
                                     println!("{:?}", message);
+                                },
+                                _ => {
+                                    
 
                                     match &mut file {
                                         None => (),
