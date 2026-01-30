@@ -401,18 +401,8 @@ fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cycle_c
 
     for _ in 0..cycle_count {
         let theta: f32 = rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI;
-        let amplitude: f32 = rng.r#gen::<f32>() * 2.0;
-        let amplitude_a: f32;
-        let amplitude_b: f32;
-
-        // Do not favor either antenna.
-        if amplitude >= 1.0 {
-            amplitude_a = 1.0;
-            amplitude_b = amplitude - 1.0;
-        } else {
-            amplitude_b = 1.0;
-            amplitude_a = amplitude;
-        }
+        let amplitude_a: f32 = 1.0;
+        let amplitude_b: f32 = 1.0;      
 
         let ri = theta.cos();
         let rq = theta.sin();
@@ -591,7 +581,7 @@ fn main() {
                             items.sort_by(|a, b| (&a.ndx).cmp(&b.ndx));
                             for message in items {
                                 dftotal_a += 1;
-                                match message.specific {
+                                match &message.specific {
                                     MessageSpecific::Df11 => { df11total_a += 1; },
                                     MessageSpecific::Df17 => { df17total_a += 1; },
                                     MessageSpecific::Df18 => { df18total_a += 1; },
@@ -599,7 +589,7 @@ fn main() {
                                 }                            
                                 
                                 // Other generates too much because it isn't error checked.
-                                match message.specific {
+                                match &message.specific {
                                     MessageSpecific::Other => (),
                                     _ => {
                                         match &mut file {
@@ -610,6 +600,22 @@ fn main() {
                                         }
                                     },
                                 }
+
+                                match hm.get(&message.ndx) {
+                                    Some(other) => {
+                                        // Compare the SNR (signal to noise) ratio
+                                        // and replace the existing if better.
+                                        if other.snr < message.snr {
+                                            hm.insert(message.ndx, message);    
+                                        }
+                                    },
+                                    None => {
+                                        // This was the first time we saw a message at
+                                        // this `message.ndx` (index) in the sample
+                                        // stream.
+                                        hm.insert(message.ndx, message);
+                                    },
+                                }                                
                             }
                         }
 
@@ -619,15 +625,15 @@ fn main() {
                             // Only turn on antenna B.
                             for message in items {
                                 dftotal_b += 1;
-                                match message.specific {
+                                match &message.specific {
                                     MessageSpecific::Df11 => { df11total_b += 1; },
                                     MessageSpecific::Df17 => { df17total_b += 1; },
                                     MessageSpecific::Df18 => { df18total_b += 1; },
                                     MessageSpecific::Other => { dfothertotal_b += 1; },
-                                }
+                                }                             
                                 
                                 // Other generates too much because it isn't error checked.
-                                match message.specific {
+                                match &message.specific {
                                     MessageSpecific::Other => (),
                                     _ => {
                                         match &mut file {
@@ -637,7 +643,23 @@ fn main() {
                                             },
                                         }
                                     },
-                                }                            
+                                }
+                                
+                                match hm.get(&message.ndx) {
+                                    Some(other) => {
+                                        // Compare the SNR (signal to noise) ratio
+                                        // and replace the existing if better.
+                                        if other.snr < message.snr {
+                                            hm.insert(message.ndx, message);    
+                                        }
+                                    },
+                                    None => {
+                                        // This was the first time we saw a message at
+                                        // this `message.ndx` (index) in the sample
+                                        // stream.
+                                        hm.insert(message.ndx, message);
+                                    },
+                                }                                
                             }                        
                         }
 
