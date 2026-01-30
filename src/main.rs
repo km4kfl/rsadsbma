@@ -417,6 +417,8 @@ fn main() {
     let stat_start = Instant::now();
     let mut stat_display = Instant::now();
 
+    let bit_error_table = crc::modes_init_error_info();
+
     match TcpStream::connect(server_addr) {
         Ok(mut stream) => {
             println!("connected");
@@ -443,6 +445,37 @@ fn main() {
                             // Send buffer to one thread.
                             tx.send(buffer.clone()).unwrap();
                         }
+
+                        // While we wait for the threads to finished process the buffer and only
+                        // turn on antenna A.
+                        {
+                            let mut items = stream::process_buffer_single(&buffer, &bit_error_table, 0.0, 1.0, 0.0);
+                            for message in items {
+                                match hm.get(&message.common.ndx) {
+                                    Some(other) => if other.common.snr < message.common.snr {
+                                        hm.insert(message.common.ndx, message);
+                                    },
+                                    None => {
+                                        hm.insert(message.common.ndx, message);
+                                    }
+                                }
+                            }
+                        }                        
+
+                        // Turn on only antenna B.
+                        {
+                            let mut items = stream::process_buffer_single(&buffer, &bit_error_table, 0.0, 0.0, 1.0);
+                            for message in items {
+                                match hm.get(&message.common.ndx) {
+                                    Some(other) => if other.common.snr < message.common.snr {
+                                        hm.insert(message.common.ndx, message);
+                                    },
+                                    None => {
+                                        hm.insert(message.common.ndx, message);
+                                    }
+                                }
+                            }
+                        }                          
 
                         //println!("getting data from threads");
                         for rx in &rxs {

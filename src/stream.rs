@@ -154,17 +154,8 @@ pub fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cyc
     for _ in 0..cycle_count {
         let theta: f32 = rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI;
         let amplitude: f32 = rng.r#gen::<f32>() * 2.0;
-        let amplitude_a: f32;
-        let amplitude_b: f32;
-
-        // Do not favor either antenna.
-        if amplitude >= 1.0 {
-            amplitude_a = 1.0;
-            amplitude_b = amplitude - 1.0;
-        } else {
-            amplitude_b = 1.0;
-            amplitude_a = amplitude;
-        }
+        let amplitude_a: f32 = 1.0;
+        let amplitude_b: f32 = 1.0;
 
         let ri = theta.cos();
         let rq = theta.sin();
