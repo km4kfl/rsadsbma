@@ -1,9 +1,11 @@
+use std::sync::{Arc, Mutex};
 use crate::constants;
 use crate::Message;
 use crate::process_result;
 use bytemuck::cast_slice;
 use rand::Rng;
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 /// Represents a message after demodulation but before decoding.
 pub struct ProcessStreamResult {
@@ -30,7 +32,8 @@ pub fn process_stream_mfloat32(
     i16stream: &[i16],
     theta: f32,
     amplitude_a: f32,
-    amplitude_b: f32) -> Vec<ProcessStreamResult> {
+    amplitude_b: f32
+) -> Vec<ProcessStreamResult> {
     let mut results: Vec<ProcessStreamResult> = Vec::new();
 
     for x in 0..stream.len() - constants::MODES_PREAMBLE_SAMPLES - constants::MODES_LONG_MSG_SAMPLES - 1 {
@@ -107,7 +110,8 @@ pub fn process_buffer_single(
     bit_error_table: &HashMap<u32, u16>,
     theta: f32,
     amplitude_a: f32,
-    amplitude_b: f32
+    amplitude_b: f32,
+    seen: &Arc<Mutex<HashMap<u32, Instant>>>
 ) -> Vec<Message> {
     let buffer: &[i16] = cast_slice(u8_buffer);
     let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / 4);
@@ -136,7 +140,7 @@ pub fn process_buffer_single(
     let mut out: Vec<Message> = Vec::new();
 
     for result in results {
-        match process_result(result, bit_error_table) {
+        match process_result(result, bit_error_table, seen) {
             Ok(message) => out.push(message),
             Err(_) => (),
         }        
@@ -145,7 +149,12 @@ pub fn process_buffer_single(
     out
 }
 
-pub fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cycle_count: u32) -> Vec<Message> {
+pub fn process_buffer(
+    u8_buffer: &[u8],
+    bit_error_table: &HashMap<u32, u16>,
+    cycle_count: u32,
+    seen: &Arc<Mutex<HashMap<u32, Instant>>>
+) -> Vec<Message> {
     let buffer: &[i16] = cast_slice(u8_buffer);
     let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / 4);
     let mut rng = rand::thread_rng();
@@ -153,7 +162,7 @@ pub fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cyc
 
     for _ in 0..cycle_count {
         let theta: f32 = rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI;
-        let amplitude: f32 = rng.r#gen::<f32>() * 2.0;
+        //let amplitude: f32 = rng.r#gen::<f32>() * 2.0;
         let amplitude_a: f32 = 1.0;
         let amplitude_b: f32 = 1.0;
 
@@ -198,7 +207,7 @@ pub fn process_buffer(u8_buffer: &[u8], bit_error_table: &HashMap<u32, u16>, cyc
     let mut out: Vec<Message> = Vec::new();
 
     for (_, result) in hm {
-        match process_result(result, bit_error_table) {
+        match process_result(result, bit_error_table, seen) {
             Ok(message) => out.push(message),
             Err(_) => (),
         }
