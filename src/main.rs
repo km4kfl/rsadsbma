@@ -578,12 +578,16 @@ impl Entity {
             self.thetas.pop_back();
         }
 
+        self.theta_avg()
+    }
+
+    fn theta_avg(&self) -> f32 {
         let mut sum = 0.0f32;
         for t in self.thetas.iter() {
             sum += t;
         }
         
-        sum / self.thetas.len() as f32
+        sum / self.thetas.len() as f32        
     }
 }
 
@@ -642,12 +646,13 @@ fn process_messages(
 
     for (addr, ent) in entities.iter() {
         println!(
-            "{:6x} {:.1} {:.2} {:.2} {}",
+            "{:6x} {:.1} {:.2} {:.2} {} {:.2}",
             addr,
             ent.alt.unwrap_or(0.0),
             ent.lat.unwrap_or(0.0),
             ent.lon.unwrap_or(0.0),
-            ent.message_count
+            ent.message_count,
+            ent.theta_avg()
         );
     }
 
