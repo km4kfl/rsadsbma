@@ -16,7 +16,7 @@ use bytemuck::bytes_of;
 use std::time::{Duration, Instant};
 use std::thread;
 use std::sync::mpsc::{channel, Sender, Receiver};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::result::Result;
 use clap::Parser;
 use std::fs::File;
@@ -567,6 +567,23 @@ struct Entity {
     flight: Option<Vec<char>>,
     aircraft_type: Option<u8>,
     last_update: u64,
+    thetas: VecDeque<f32>,
+}
+
+impl Entity {
+    fn push_theta_cap_avg(&mut self, theta: f32, num: usize) -> f32 {
+        self.thetas.push_front(theta);
+        while self.thetas.len() > num {
+            self.thetas.pop_back();
+        }
+
+        let mut sum = 0.0f32;
+        for t in self.thetas.iter() {
+            sum += t;
+        }
+        
+        sum / self.thetas.len() as f32
+    }
 }
 
 fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
@@ -582,6 +599,7 @@ fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
                 flight: None,
                 last_update: 0u64,
                 aircraft_type: None,
+                thetas: VecDeque::new(),
             });
         },
     }
@@ -638,6 +656,9 @@ fn process_messages(
                 ent.last_update = sample_index;
                 ent.flight = Some(flight);
                 ent.aircraft_type = Some(aircraft_type);
+
+                // Update get average set a pipe or existing pipe.
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
             },
             MessageSpecific::AirbornePositionMessage {
                 hdr,
@@ -651,6 +672,9 @@ fn process_messages(
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.last_update = sample_index;
                 ent.alt = Some(altitude);
+
+                // Update get average set a pipe or existing pipe.
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
 
                 if f_flag {
                     ent.odd_cpr = Some((raw_lat, raw_lon, sample_index));
