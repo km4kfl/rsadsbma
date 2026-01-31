@@ -152,7 +152,7 @@ pub fn process_buffer_single(
 pub fn process_buffer(
     u8_buffer: &[u8],
     bit_error_table: &HashMap<u32, u16>,
-    cycle_count: u32,
+    pipe_theta: &Vec<Option<f32>>,
     seen: &Arc<Mutex<HashMap<u32, Instant>>>
 ) -> Vec<Message> {
     let buffer: &[i16] = cast_slice(u8_buffer);
@@ -160,8 +160,12 @@ pub fn process_buffer(
     let mut rng = rand::thread_rng();
     let mut hm: HashMap<usize, ProcessStreamResult> = HashMap::new();
 
-    for _ in 0..cycle_count {
-        let theta: f32 = rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI;
+    for pipe_ndx in 0..pipe_theta.len() {
+        let theta = match &pipe_theta[pipe_ndx] {
+            None => rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI,
+            Some(theta) => *theta,
+        };
+
         //let amplitude: f32 = rng.r#gen::<f32>() * 2.0;
         let amplitude_a: f32 = 1.0;
         let amplitude_b: f32 = 1.0;

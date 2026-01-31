@@ -422,22 +422,6 @@ fn write_message_to_file(file: &mut File, m: &Message) {
     file.write_all(bytes_of(&m.common.amplitude_b)).unwrap();
 }
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// Number of threads to use.
-    #[arg(short, long)]
-    thread_count: u32,
-
-    /// Number of cycles per thread.
-    #[arg(short, long)]
-    cycle_count: u32,
-
-    /// A file prefix to write messages.
-    #[arg(short, long)]
-    file_output: Option<String>,
-}
-
 fn cpr_nl_function(mut lat: f32) -> f32 {
     if lat < 0.0 {
         lat = -lat;
@@ -576,20 +560,27 @@ fn decode_cpr(even: (u32, u32, u64), odd: (u32, u32, u64)) -> Option<(f32, f32)>
 struct Entity {
     odd_cpr: Option<(u32, u32, u64)>,
     even_cpr: Option<(u32, u32, u64)>,
-    count_odd: u64,
-    count_even: u64,
+    lat: Option<f32>,
+    lon: Option<f32>,
+    alt: Option<f32>,
+    flight: Option<Vec<char>>,
+    aircraft_type: Option<u8>,
+    last_update: u64,
 }
 
 fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
     match entities.get_mut(&addr) {
-        Some(ent) => {
-        },
+        Some(_) => (),
         None => {
             entities.insert(addr, Entity {
                 odd_cpr: None,
                 even_cpr: None,
-                count_odd: 0,
-                count_even: 0,
+                lat: None,
+                lon: None,
+                alt: None,
+                flight: None,
+                last_update: 0u64,
+                aircraft_type: None,
             });
         },
     }
@@ -610,70 +601,109 @@ fn process_messages(
         // produce reference for ground vehicles
         // produce SBS output and send to clients
     
-    /*
-    println!("====== START ========");
+    println!("====== AIRCRAFT ========");
     for (addr, ent) in entities.iter() {
-        println!("{:x} {} {}", addr, ent.count_even, ent.count_odd);
+        println!("{:6x} {:.1}", addr, ent.alt.unwrap_or(0.0));
     }
-    println!("====== END ========");
-    */
 
     for (sub_sample_index, m) in messages {
+        let sample_index = sub_sample_index as u64 + buffer_start_sample_index;
+
         match m.specific {
-            MessageSpecific::AirbornePositionMessage {
-                hdr: hdr,
-                f_flag: f_flag,
-                t_flag: t_flag,
-                altitude: altitude,
-                raw_lat: raw_lat,
-                raw_lon: raw_lon,
+            MessageSpecific::AircraftIdenAndCat {
+                hdr,
+                aircraft_type,
+                flight,
             } => {
-                let sample_index = sub_sample_index as u64 + buffer_start_sample_index;
-
                 init_entity_if_not(hdr.addr, entities);
-                match entities.get_mut(&hdr.addr) {
-                    Some(ent) => {
-                        // &mut Entity
+                let ent = entities.get_mut(&hdr.addr).unwrap();
+                ent.last_update = sample_index;
+                ent.flight = Some(flight);
+                ent.aircraft_type = Some(aircraft_type);
+            },
+            MessageSpecific::AirbornePositionMessage {
+                hdr,
+                f_flag,
+                t_flag,
+                altitude,
+                raw_lat,
+                raw_lon,
+            } => {
+                init_entity_if_not(hdr.addr, entities);
+                let ent = entities.get_mut(&hdr.addr).unwrap();
+                ent.last_update = sample_index;
+                ent.alt = Some(altitude);
 
-                        if f_flag {
-                            ent.odd_cpr = Some((raw_lat, raw_lon, sample_index));
-                            ent.count_odd += 1;
-                        } else {
-                            ent.even_cpr = Some((raw_lat, raw_lon, sample_index));
-                            ent.count_even += 1;
-                        }
+                if f_flag {
+                    ent.odd_cpr = Some((raw_lat, raw_lon, sample_index));
+                } else {
+                    ent.even_cpr = Some((raw_lat, raw_lon, sample_index));
+                }
 
-                        match ent.even_cpr {
-                            Some(a) => match ent.odd_cpr {
-                                Some(b) => {
-                                    let delta = if a.2 > b.2 {
-                                        a.2 - b.2
-                                    } else {
-                                        b.2 - a.2
-                                    };
-                                    
-                                    // Divide delta by the sample rate for the number of seconds
-                                    // between each pair of raw coordinates.
-                                    if delta / 2000000u64 <= 10 {
-                                        match decode_cpr(a, b) {
-                                            Some((lat, lon)) => {
-                                                println!("{} {}", lat, lon);
-                                            },
-                                            None => (),
-                                        }
-                                    }
-                                },
-                                None => (),
-                            },
-                            None => (),
-                        }
+                match ent.even_cpr {
+                    Some(a) => match ent.odd_cpr {
+                        Some(b) => {
+                            let delta = if a.2 > b.2 {
+                                a.2 - b.2
+                            } else {
+                                b.2 - a.2
+                            };
+                            
+                            // Divide delta by the sample rate for the number of seconds
+                            // between each pair of raw coordinates.
+                            if delta / 2000000u64 <= 10 {
+                                match decode_cpr(a, b) {
+                                    Some((lat, lon)) => {
+                                        ent.lat = Some(lat);
+                                        ent.lon = Some(lon);
+                                    },
+                                    None => (),
+                                }
+                            }
+                        },
+                        None => (),
                     },
-                    None => panic!("bug"),
+                    None => (),
                 }
             },
             _ => (),
         }
     }
+}
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Number of threads to use.
+    #[arg(short, long)]
+    thread_count: u32,
+
+    /// Number of cycles per thread.
+    #[arg(short, long)]
+    cycle_count: u32,
+
+    /// A file prefix to write messages.
+    #[arg(short, long)]
+    file_output: Option<String>,
+
+    /// TCP listening port for BaseStation format output
+    #[clap(default_value_t = 30003)]
+    net_sbs_port: u16
+}
+
+fn set_addr_to_pipe(
+    addr: u32,
+    addr_to_pipe: &mut HashMap<u32, (usize, u16)>,
+    pipe_to_addr: &mut Vec<Option<u32>>,
+    txs: &Vec<Sender<Vec<u8>>>
+) -> Option<usize> {
+    None
+}
+
+enum ThreadTxMessage {
+    Buffer(Vec<u8>),
+    SetTheta(usize, f32),
+    UnsetTheta(usize),
 }
 
 fn main() {
@@ -688,9 +718,15 @@ fn main() {
 
     let server_addr = "127.0.0.1:7878";
 
-    let mut txs: Vec<Sender<Vec<u8>>> = Vec::new();
+    let mut txs: Vec<Sender<ThreadTxMessage>> = Vec::new();
     let mut rxs: Vec<Receiver<Vec<Message>>> = Vec::new();
     let seen: Arc<Mutex<HashMap<u32, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    // This maps an addr to what pipe using the tuple (thread_ndx, cycle_ndx). The cycles/pipes
+    // start out in random mode but they can be assigned a specific theta in order to track an
+    // aircraft.
+    let mut addr_to_pipe: HashMap<u32, (usize, usize)> = HashMap::new();
+    let mut pipe_to_addr: Vec<Option<u32>> = vec![None; thread_count as usize * cycle_count as usize];
 
     let seen_local = seen.clone();
 
@@ -705,9 +741,25 @@ fn main() {
         thread::spawn(move || {
             println!("spawned");
             let bit_error_table = crc::modes_init_error_info();
+            let mut pipe_theta: Vec<Option<f32>> = vec![None; cycle_count as usize];
+
             loop {
-                let buffer = brx.recv().unwrap();
-                btx.send(stream::process_buffer(&buffer, &bit_error_table, cycle_count, &seen_thread)).unwrap();
+                match brx.recv().unwrap() {
+                    ThreadTxMessage::Buffer(buffer) => {
+                        btx.send(stream::process_buffer(
+                            &buffer,
+                            &bit_error_table,
+                            &pipe_theta,
+                            &seen_thread
+                        )).unwrap();
+                    },
+                    ThreadTxMessage::SetTheta(pipe_ndx, theta) => {
+                        pipe_theta[pipe_ndx] = Some(theta);
+                    },
+                    ThreadTxMessage::UnsetTheta(pipe_ndx) => {
+                        pipe_theta[pipe_ndx] = None;
+                    },
+                }
             }
         });
     }
@@ -749,7 +801,7 @@ fn main() {
                         
                         for tx in &txs {
                             // Send buffer to one thread.
-                            tx.send(buffer.clone()).unwrap();
+                            tx.send(ThreadTxMessage::Buffer(buffer.clone())).unwrap();
                         }
 
                         // While we wait for the threads to finished process the buffer and only
