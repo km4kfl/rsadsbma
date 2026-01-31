@@ -567,6 +567,7 @@ struct Entity {
     flight: Option<Vec<char>>,
     aircraft_type: Option<u8>,
     last_update: u64,
+    message_count: u64,
     thetas: VecDeque<f32>,
 }
 
@@ -600,6 +601,7 @@ fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
                 last_update: 0u64,
                 aircraft_type: None,
                 thetas: VecDeque::new(),
+                message_count: 0,
             });
         },
     }
@@ -639,13 +641,39 @@ fn process_messages(
     }
 
     for (addr, ent) in entities.iter() {
-        println!("{:6x} {:.1}", addr, ent.alt.unwrap_or(0.0));
+        println!(
+            "{:6x} {:.1} {:.2} {:.2} {}",
+            addr,
+            ent.alt.unwrap_or(0.0),
+            ent.lat.unwrap_or(0.0),
+            ent.lon.unwrap_or(0.0),
+            ent.message_count
+        );
     }
 
     for (sub_sample_index, m) in messages {
         let sample_index = sub_sample_index as u64 + buffer_start_sample_index;
 
         match m.specific {
+            MessageSpecific::AirborneVelocityMessageShort {
+                hdr, heading
+            } => {
+                init_entity_if_not(hdr.addr, entities);
+                let ent = entities.get_mut(&hdr.addr).unwrap();
+                ent.message_count += 1;
+                // Update get average set a pipe or existing pipe.
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+            },
+            MessageSpecific::AirborneVelocityMessage {
+                hdr, ew_dir, ew_velocity, ns_dir, ns_velocity, vert_rate_source, vert_rate_sign,
+                vert_rate, velocity, heading
+            } => {
+                init_entity_if_not(hdr.addr, entities);
+                let ent = entities.get_mut(&hdr.addr).unwrap();
+                ent.message_count += 1;
+                // Update get average set a pipe or existing pipe.
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+            },
             MessageSpecific::AircraftIdenAndCat {
                 hdr,
                 aircraft_type,
@@ -656,6 +684,7 @@ fn process_messages(
                 ent.last_update = sample_index;
                 ent.flight = Some(flight);
                 ent.aircraft_type = Some(aircraft_type);
+                ent.message_count += 1;
 
                 // Update get average set a pipe or existing pipe.
                 pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
@@ -672,6 +701,7 @@ fn process_messages(
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.last_update = sample_index;
                 ent.alt = Some(altitude);
+                ent.message_count += 1;
 
                 // Update get average set a pipe or existing pipe.
                 pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
