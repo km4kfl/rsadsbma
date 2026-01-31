@@ -691,13 +691,83 @@ struct Args {
     net_sbs_port: u16
 }
 
-fn set_addr_to_pipe(
-    addr: u32,
-    addr_to_pipe: &mut HashMap<u32, (usize, u16)>,
-    pipe_to_addr: &mut Vec<Option<u32>>,
-    txs: &Vec<Sender<Vec<u8>>>
-) -> Option<usize> {
-    None
+struct PipeManagement {
+    txs: Vec<Sender<ThreadTxMessage>>,
+    addr_to_pipe: HashMap<u32, (usize, usize)>,
+    pipe_to_addr: Vec<Option<u32>>,
+    thread_count: usize,
+    pipe_count: usize,
+}
+
+impl PipeManagement {
+    fn new(thread_count: usize, pipe_count: usize) -> PipeManagement {
+        PipeManagement {
+            txs: Vec::new(),
+            addr_to_pipe: HashMap::new(),
+            pipe_to_addr: vec![None; thread_count * pipe_count],
+            thread_count: thread_count,
+            pipe_count: pipe_count,
+        }
+    }
+
+    /// Unassigns a pipe assigned to addr if any.
+    fn unset_addr(&mut self, addr: u32) {
+        let mut args: Option<(usize, usize)> = None;
+
+        match self.addr_to_pipe.get(&addr) {
+            None => (),
+            Some((thread_ndx, pipe_ndx)) => {
+                args = Some((*thread_ndx,  *pipe_ndx));
+            },
+        }
+
+        match args {
+            None => (),
+            Some((thread_ndx, pipe_ndx)) => {
+                self.addr_to_pipe.remove(&addr);
+                self.pipe_to_addr[thread_ndx * self.pipe_count + pipe_ndx] = None;
+                self.txs[thread_ndx].send(ThreadTxMessage::UnsetTheta(pipe_ndx)).unwrap();
+            }
+        }
+    }
+
+    /// Finds an unused pipe and sets its theta and assigns it to the specified `addr` or updates an existing.
+    fn set_addr_to_theta(
+        &mut self,
+        addr: u32,
+        theta: f32,
+    ) -> bool {
+        match self.addr_to_pipe.get(&addr) {
+            Some((thread_ndx, pipe_ndx)) => {
+                self.txs[*thread_ndx].send(ThreadTxMessage::SetTheta(*pipe_ndx, theta)).unwrap();
+                true
+            },
+            None => {
+                for x in 0..self.pipe_to_addr.len() {
+                    if self.pipe_to_addr[x].is_none() {
+                        self.pipe_to_addr[x] = Some(addr);
+                        let thread_ndx = x / self.pipe_count;
+                        let pipe_ndx = x - thread_ndx * self.pipe_count;
+                        self.addr_to_pipe.insert(addr, (thread_ndx, pipe_ndx));
+                        self.txs[thread_ndx].send(ThreadTxMessage::SetTheta(pipe_ndx, theta)).unwrap();
+                        return true;
+                    }
+                }
+                false
+            },
+        }
+    }
+
+    fn send_buffer_to_all(&self, buffer: &Vec<u8>) {
+        for tx in &self.txs {
+            tx.send(ThreadTxMessage::Buffer(buffer.clone())).unwrap();
+        }
+    }
+    
+    /// Used when this structure is first created.
+    fn push_tx(&mut self, sender: Sender<ThreadTxMessage>) {
+        self.txs.push(sender);
+    }
 }
 
 enum ThreadTxMessage {
@@ -718,22 +788,17 @@ fn main() {
 
     let server_addr = "127.0.0.1:7878";
 
-    let mut txs: Vec<Sender<ThreadTxMessage>> = Vec::new();
+    let mut pipe_mgmt = PipeManagement::new(thread_count as usize, cycle_count as usize);
+
     let mut rxs: Vec<Receiver<Vec<Message>>> = Vec::new();
     let seen: Arc<Mutex<HashMap<u32, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
-
-    // This maps an addr to what pipe using the tuple (thread_ndx, cycle_ndx). The cycles/pipes
-    // start out in random mode but they can be assigned a specific theta in order to track an
-    // aircraft.
-    let mut addr_to_pipe: HashMap<u32, (usize, usize)> = HashMap::new();
-    let mut pipe_to_addr: Vec<Option<u32>> = vec![None; thread_count as usize * cycle_count as usize];
 
     let seen_local = seen.clone();
 
     for _ in 0..thread_count {
         let (atx, brx) = channel();
         let (btx, arx) = channel();
-        txs.push(atx);
+        pipe_mgmt.push_tx(atx);
         rxs.push(arx);
 
         let seen_thread = seen.clone();
@@ -799,10 +864,7 @@ fn main() {
 
                         let mut hm: HashMap<usize, Message> = HashMap::new();
                         
-                        for tx in &txs {
-                            // Send buffer to one thread.
-                            tx.send(ThreadTxMessage::Buffer(buffer.clone())).unwrap();
-                        }
+                        pipe_mgmt.send_buffer_to_all(&buffer);
 
                         // While we wait for the threads to finished process the buffer and only
                         // turn on antenna A.
