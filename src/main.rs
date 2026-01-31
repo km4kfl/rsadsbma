@@ -8,6 +8,7 @@
 //! Thanks to Malcolm Robb <support@attavionics.com> and https://github.com/MalcolmRobb/dump1090/
 //! Thanks to https://github.com/flightaware/dump1090
 
+use std::iter::Map;
 use std::sync::{Arc, Mutex};
 use std::io::Read;
 use std::net::TcpStream;
@@ -594,6 +595,7 @@ fn process_messages(
     messages: Vec<(usize, Message)>,
     entities: &mut HashMap<u32, Entity>,
     buffer_start_sample_index: u64,
+    pipe_mgmt: &mut PipeManagement
 ) {
     // process each message
         // track raw latitudes and longitudes and computing actual coordinates
@@ -602,6 +604,22 @@ fn process_messages(
         // produce SBS output and send to clients
     
     println!("====== AIRCRAFT ========");
+    let keys: Vec<u32> = entities.keys().map(|x| *x).collect();
+
+    for addr in keys {
+        let last_update = entities.get(&addr).unwrap().last_update;
+        let delta = buffer_start_sample_index - last_update;
+        // If we have not heard from an entity in roughly 10 seconds then
+        // remove it from the list and make sure to unset any pipe that
+        // was assigned to it.
+        if delta / 2000000u64 > 10 {
+            pipe_mgmt.unset_addr(addr);
+            entities.remove(&addr);
+            println!("removed addr {:6x}", addr);
+        }
+
+    }
+
     for (addr, ent) in entities.iter() {
         println!("{:6x} {:.1}", addr, ent.alt.unwrap_or(0.0));
     }
@@ -941,7 +959,7 @@ fn main() {
                             }
                         }
 
-                        process_messages(items, &mut entities, sample_index);
+                        process_messages(items, &mut entities, sample_index, &mut pipe_mgmt);
                         
                         {
                             let elapsed_dur: Duration = start.elapsed();
