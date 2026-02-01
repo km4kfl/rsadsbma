@@ -621,43 +621,8 @@ fn process_messages(
     buffer_start_sample_index: u64,
     pipe_mgmt: &mut PipeManagement
 ) {
-    // process each message
-        // track raw latitudes and longitudes and computing actual coordinates
-        // track ground vehicles
-        // produce reference for ground vehicles
-        // produce SBS output and send to clients
-    
-    println!("====== AIRCRAFT ========");
-    let keys: Vec<u32> = entities.keys().map(|x| *x).collect();
-
-    for addr in keys {
-        let last_update = entities.get(&addr).unwrap().last_update;
-        let delta = buffer_start_sample_index - last_update;
-        // If we have not heard from an entity in roughly 10 seconds then
-        // remove it from the list and make sure to unset any pipe that
-        // was assigned to it.
-        if delta / 2000000u64 > 10 {
-            pipe_mgmt.unset_addr(addr);
-            entities.remove(&addr);
-            println!("removed addr {:6x}", addr);
-        }
-
-    }
-
-    for (addr, ent) in entities.iter() {
-        println!(
-            "{:6x} {:.1} {:.2} {:.2} {} {:.2}",
-            addr,
-            ent.alt.unwrap_or(0.0),
-            ent.lat.unwrap_or(0.0),
-            ent.lon.unwrap_or(0.0),
-            ent.message_count,
-            ent.theta_avg()
-        );
-    }
-
-    for (sub_sample_index, m) in messages {
-        let sample_index = sub_sample_index as u64 + buffer_start_sample_index;
+    for (buffer_sample_index, m) in messages {
+        let sample_index = buffer_sample_index as u64 + buffer_start_sample_index;
 
         match m.specific {
             MessageSpecific::AirborneVelocityMessageShort {
@@ -919,6 +884,14 @@ fn main() {
 
     let mut sample_index: u64 = 0;
 
+    let mut stat_aiac: u64 = 0;
+    let mut stat_spm: u64 = 0;
+    let mut stat_apm: u64 = 0;
+    let mut stat_avm: u64 = 0;
+    let mut stat_avms: u64 = 0;
+    let mut stat_start = Instant::now();
+    let stat_gstart = Instant::now();
+
     match TcpStream::connect(server_addr) {
         Ok(mut stream) => {
             println!("connected");
@@ -1004,10 +977,17 @@ fn main() {
                         for (_, message) in &items {
                             // Other generates too much because it isn't error checked.
                             match message.specific {
+                                MessageSpecific::AircraftIdenAndCat { .. } => stat_aiac += 1,
+                                MessageSpecific::SurfacePositionMessage { .. } => stat_spm += 1,
+                                MessageSpecific::AirbornePositionMessage { .. } => stat_apm += 1,
+                                MessageSpecific::AirborneVelocityMessage { .. } => stat_avm += 1,
+                                MessageSpecific::AirborneVelocityMessageShort { .. } => stat_avms += 1,
+                                _ => (),
+                            }
+
+                            match message.specific {
                                 MessageSpecific::Other => (),
                                 _ => {
-                                    //println!("{:?}", message);   
-
                                     match &mut file {
                                         None => (),
                                         Some(file) => {
@@ -1015,10 +995,47 @@ fn main() {
                                         },
                                     }
                                 },
-                            }
+                            }                            
                         }
 
                         process_messages(items, &mut entities, sample_index, &mut pipe_mgmt);
+
+                        if (Instant::now() - stat_start).as_secs() > 5 {
+                            stat_start = Instant::now();
+                            let elapsed_dur: Duration = stat_gstart.elapsed();
+                            let elapsed = elapsed_dur.as_secs() as f64 + elapsed_dur.subsec_micros() as f64 / 1e6f64;
+                            println!("Type                          Total/PerSecond");
+                            println!("AircraftIdenAndCat            {}/{:.1}", stat_aiac, stat_aiac as f64 / elapsed);
+                            println!("SurfacePositionMessage        {}/{:.1}", stat_spm, stat_spm as f64 / elapsed);
+                            println!("AirbornePositionMessage       {}/{:.1}", stat_apm, stat_apm as f64 / elapsed);
+                            println!("AirborneVelocityMessage       {}/{:.1}", stat_avm, stat_avm as f64 / elapsed);
+                            println!("AirborneVelocityMessageShort  {}/{:.1}", stat_avms, stat_avms as f64 / elapsed);
+                            println!("====== AIRCRAFT ========");
+                            let keys: Vec<u32> = entities.keys().map(|x| *x).collect();
+                            for addr in keys {
+                                let last_update = entities.get(&addr).unwrap().last_update;
+                                let delta = sample_index - last_update;
+                                // If we have not heard from an entity in roughly 10 seconds then
+                                // remove it from the list and make sure to unset any pipe that
+                                // was assigned to it.
+                                if delta / 2000000u64 > 10 {
+                                    pipe_mgmt.unset_addr(addr);
+                                    entities.remove(&addr);
+                                    println!("removed addr {:6x}", addr);
+                                }
+                            }
+                            for (addr, ent) in entities.iter() {
+                                println!(
+                                    "{:6x} {:.1} {:.2} {:.2} {} {:.2}",
+                                    addr,
+                                    ent.alt.unwrap_or(0.0),
+                                    ent.lat.unwrap_or(0.0),
+                                    ent.lon.unwrap_or(0.0),
+                                    ent.message_count,
+                                    ent.theta_avg()
+                                );
+                            }                                                    
+                        }
                         
                         {
                             let elapsed_dur: Duration = start.elapsed();
