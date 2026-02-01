@@ -1004,7 +1004,9 @@ fn main() {
                                 None => (),
                                 Some(ref mut stream) => {
                                     let msg = message.common.msg.clone();
-                                    let hex_string: String = msg.iter().map(|byte| format!("{:02X}", byte)).collect();
+                                    let hex_string: String = msg.iter().map(
+                                        |byte| format!("{:02X}", byte)
+                                    ).collect();
                                     let line = format!("*{};\n", hex_string);
                                     if line.is_ascii() {
                                         let ascii_bytes = line.as_bytes();
@@ -1046,7 +1048,7 @@ fn main() {
                                 // If we have not heard from an entity in roughly 10 seconds then
                                 // remove it from the list and make sure to unset any pipe that
                                 // was assigned to it.
-                                if delta / 2000000u64 > 10 {
+                                if delta / 2_000_000u64 > 60 {
                                     pipe_mgmt.unset_addr(addr);
                                     entities.remove(&addr);
                                     println!("removed addr {:6x}", addr);
