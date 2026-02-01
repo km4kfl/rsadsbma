@@ -8,6 +8,7 @@
 //! Thanks to Malcolm Robb <support@attavionics.com> and https://github.com/MalcolmRobb/dump1090/
 //! Thanks to https://github.com/flightaware/dump1090
 
+use std::ascii::AsciiExt;
 use std::iter::Map;
 use std::sync::{Arc, Mutex};
 use std::io::Read;
@@ -713,26 +714,6 @@ fn process_messages(
     }
 }
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// Number of threads to use.
-    #[arg(short, long)]
-    thread_count: u32,
-
-    /// Number of cycles per thread.
-    #[arg(short, long)]
-    cycle_count: u32,
-
-    /// A file prefix to write messages.
-    #[arg(short, long)]
-    file_output: Option<String>,
-
-    /// TCP listening port for BaseStation format output
-    #[clap(default_value_t = 30003)]
-    net_sbs_port: u16
-}
-
 struct PipeManagement {
     txs: Vec<Sender<ThreadTxMessage>>,
     addr_to_pipe: HashMap<u32, (usize, usize)>,
@@ -818,6 +799,26 @@ enum ThreadTxMessage {
     UnsetTheta(usize),
 }
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Number of threads to use.
+    #[arg(short, long)]
+    thread_count: u32,
+
+    /// Number of cycles per thread.
+    #[arg(short, long)]
+    cycle_count: u32,
+
+    /// A file prefix to write messages.
+    #[arg(short, long)]
+    file_output: Option<String>,
+
+    /// TCP address to output raw messages to.
+    #[arg(short, long)]
+    net_raw_out: Option<String>,
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -891,6 +892,20 @@ fn main() {
     let mut stat_avms: u64 = 0;
     let mut stat_start = Instant::now();
     let stat_gstart = Instant::now();
+
+    let mut net_raw_out_stream: Option<TcpStream> = match args.net_raw_out {
+        None => None,
+        Some(addr) => match TcpStream::connect(addr.clone()) {
+            Ok(mut stream) => {
+                println!("connected to --net-raw-out {}", addr);
+                Some(stream)
+            },
+            Err(e) => {
+                println!("{}", e);
+                panic!("failed to connect to --net-raw-out")
+            },
+        },
+    };
 
     match TcpStream::connect(server_addr) {
         Ok(mut stream) => {
@@ -983,6 +998,19 @@ fn main() {
                                 MessageSpecific::AirborneVelocityMessage { .. } => stat_avm += 1,
                                 MessageSpecific::AirborneVelocityMessageShort { .. } => stat_avms += 1,
                                 _ => (),
+                            }
+
+                            match net_raw_out_stream {
+                                None => (),
+                                Some(ref mut stream) => {
+                                    let msg = message.common.msg.clone();
+                                    let hex_string: String = msg.iter().map(|byte| format!("{:02X}", byte)).collect();
+                                    let line = format!("*{};\n", hex_string);
+                                    if line.is_ascii() {
+                                        let ascii_bytes = line.as_bytes();
+                                        stream.write(ascii_bytes).unwrap();
+                                    }
+                                },
                             }
 
                             match message.specific {
