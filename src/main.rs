@@ -5,7 +5,9 @@
 //! idea for a future project.
 //!
 //! Thanks to Salvatore Sanfilippo <antirez@gmail.com> and https://github.com/antirez/dump1090/
+//!
 //! Thanks to Malcolm Robb <support@attavionics.com> and https://github.com/MalcolmRobb/dump1090/
+//!
 //! Thanks to https://github.com/flightaware/dump1090
 
 use std::ascii::AsciiExt;
@@ -30,6 +32,7 @@ mod stream;
 
 use constants::*;
 
+/// Members that are common to all messages.
 struct MessageCommon {
     /// The bytes that comprise the message after demodulation.
     msg: Vec<u8>,
@@ -64,6 +67,7 @@ struct Message {
     specific: MessageSpecific,
 }
 
+/// Elements that are common to a few different specific message types.
 #[derive(Debug)]
 struct DfHeader1 {
     capability: u8,
@@ -410,6 +414,7 @@ fn process_result(
     }
 }
 
+/// Serialize the common elements of a message to a file.
 fn write_message_to_file(file: &mut File, m: &Message) {
     file.write_all(bytes_of(&(m.common.msg.len() as u16))).unwrap();
     file.write_all(&m.common.msg).unwrap();
@@ -559,6 +564,7 @@ fn decode_cpr(even: (u32, u32, u64), odd: (u32, u32, u64)) -> Option<(f32, f32)>
     }
 }
 
+/// Anything with a transponder such as an aircraft.
 struct Entity {
     odd_cpr: Option<(u32, u32, u64)>,
     even_cpr: Option<(u32, u32, u64)>,
@@ -573,6 +579,7 @@ struct Entity {
 }
 
 impl Entity {
+    /// Push new theta, pop any over `num` size, and return the average of the remaining theta elements.
     fn push_theta_cap_avg(&mut self, theta: f32, num: usize) -> f32 {
         self.thetas.push_front(theta);
         while self.thetas.len() > num {
@@ -582,6 +589,7 @@ impl Entity {
         self.theta_avg()
     }
 
+    /// Return the average of the elements of the `thetas` array.
     fn theta_avg(&self) -> f32 {
         let mut sum = 0.0f32;
         for t in self.thetas.iter() {
@@ -592,6 +600,7 @@ impl Entity {
     }
 }
 
+/// Initialize a new entity/aircraft is none is found.
 fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
     match entities.get_mut(&addr) {
         Some(_) => (),
@@ -614,8 +623,9 @@ fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
 
 /// Process the messages computing coordinates and sending output to SBS clients.
 ///
-/// Here we iterate the messages, collecting odd and even raw coordinates, computing
-/// the actual coordinates, and sending the output to any SBS clients.
+/// Here we iterate the messages, collecting odd and even raw coordinates, and computing
+/// the actual coordinates. There is still a lot more work that can be done here. All of
+/// this was copied from the `dump1090` implementation by antirez.
 fn process_messages(
     messages: Vec<(usize, Message)>,
     entities: &mut HashMap<u32, Entity>,
@@ -714,15 +724,28 @@ fn process_messages(
     }
 }
 
+/// Provides easy to use functions to manage the cycle/pipes across multiple threads.
+///
+/// This provides the ability to easily find free pipes/cycles to associate with a transponder
+/// aircraft and assign a specific theta value for use in beamforming. It also allows one to
+/// disassociate a pipe when it is no longer needed causing it to run the standard algorithm
+/// which at this moment is a random search.
 struct PipeManagement {
     txs: Vec<Sender<ThreadTxMessage>>,
+    /// Maps transponder address or u32 to a pipe.
     addr_to_pipe: HashMap<u32, (usize, usize)>,
+    /// Maps each pipe to a transponder address or u32.
     pipe_to_addr: Vec<Option<u32>>,
+    /// The total number of threads.
     thread_count: usize,
+    /// The total number of pipes per thread.
     pipe_count: usize,
 }
 
 impl PipeManagement {
+    /// Create a new management structure.
+    ///
+    /// This is only called once during program initialization.
     fn new(thread_count: usize, pipe_count: usize) -> PipeManagement {
         PipeManagement {
             txs: Vec::new(),
@@ -781,6 +804,7 @@ impl PipeManagement {
         }
     }
 
+    /// Sends a buffer to all threads to be processed.
     fn send_buffer_to_all(&self, buffer: &Vec<u8>) {
         for tx in &self.txs {
             tx.send(ThreadTxMessage::Buffer(buffer.clone())).unwrap();
@@ -793,12 +817,17 @@ impl PipeManagement {
     }
 }
 
+/// A collection of messages each thread understands.
 enum ThreadTxMessage {
+    /// Used to send a buffer to be processed to a thread.
     Buffer(Vec<u8>),
+    /// Used to set a theta to a constant value for a single pipe.
     SetTheta(usize, f32),
+    /// Used to revert a pipe back to a value that is randomly choosen per buffer process operation.
     UnsetTheta(usize),
 }
 
+/// The command line arguments for the program using the crate Clap.
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
