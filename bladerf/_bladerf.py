@@ -265,6 +265,9 @@ class PowerSource(enum.Enum):
     def __str__(self):
         return self.name
 
+class TriggerSignal:
+    Trigger_J71_4 = libbladeRF.BLADERF_TRIGGER_J71_4
+    Trigger_J51_1 = libbladeRF.BLADERF_TRIGGER_J51_1
 
 class PMICRegister(enum.Enum):
     Configuration = libbladeRF.BLADERF_PMIC_CONFIGURATION
@@ -462,6 +465,8 @@ BLADERF_REFIN_DEFAULT = 10.0e6
 
 BLADERF_SERIAL_LENGTH = 33
 
+TRIGGER_ROLE_MASTER = libbladeRF.BLADERF_TRIGGER_ROLE_MASTER
+TRIGGER_ROLE_SLAVE = libbladeRF.BLADERF_TRIGGER_ROLE_SLAVE
 
 ###############################################################################
 
@@ -809,6 +814,20 @@ class BladeRF:
     loopback = property(get_loopback, set_loopback, doc="Loopback selection")
 
     # Trigger TBD
+
+    def trigger_init(self, ch, signal):
+        trigger = ffi.new("struct bladerf_trigger *")
+        ret = libbladeRF.bladerf_trigger_init(self.dev[0], ch, signal, trigger)
+        _check_error(ret)
+        return trigger
+
+    def trigger_arm(self, trigger, arm, resv1, resv2):
+        ret = libbladeRF.bladerf_trigger_arm(self.dev[0], trigger, arm, resv1, resv2)
+        _check_error(ret)
+    
+    def trigger_fire(self, trigger):
+        ret = libbladeRF.bladerf_trigger_fire(self.dev[0], trigger)
+        _check_error(ret)
 
     # Sample RX Mux
 
