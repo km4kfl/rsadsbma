@@ -977,7 +977,7 @@ fn main() {
             println!("working with {} streams", streams);
 
             let sps: f64 = 2e6f64;
-            let buffer_time: f64 = buffer.len() as f64 / 8.0f64 /  sps;
+            let buffer_time: f64 = buffer.len() as f64 / (streams as f64 * 4.0f64) /  sps;
             println!("reading stream");
             // TODO: Take the tail end of the buffer and prefix it to the
             // next buffer incase a message is across the two buffers.
@@ -1108,7 +1108,7 @@ fn main() {
                             }
                         }
 
-                        sample_index += buffer.len() as u64 / 8;
+                        sample_index += buffer.len() as u64 / (streams * 4) as u64;
                         read = 0;
                     }
 
