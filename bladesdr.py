@@ -36,6 +36,10 @@ def main(args):
     while True:
         connection, client = tcp_socket.accept()
         print('got client', client)
+
+        # Send the number of streams as a byte.
+        connection.sendall(bytes([2]))
+
         # Clear the buffer incase it is dirty.
         dev.sample_as_bytes(buffer_samps, 2, 4, 0)
         try:

@@ -132,7 +132,7 @@ pub fn process_buffer_single(
 
     let mul = streams * 2;
 
-    for x in 0..buffer.len() / 4 {
+    for x in 0..buffer.len() / mul {
         let mut ai: f32 = buffer[x * mul + 0] as f32 / 2049.0 * amplitudes[0];
         let mut aq: f32 = buffer[x * mul + 1] as f32 / 2049.0 * amplitudes[0];
         

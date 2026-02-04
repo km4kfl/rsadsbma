@@ -819,9 +819,9 @@ impl PipeManagement {
     }
 
     /// Sends a buffer to all threads to be processed.
-    fn send_buffer_to_all(&self, buffer: &Vec<u8>) {
+    fn send_buffer_to_all(&self, buffer: &Vec<u8>, streams: usize) {
         for tx in &self.txs {
-            tx.send(ThreadTxMessage::Buffer(buffer.clone())).unwrap();
+            tx.send(ThreadTxMessage::Buffer(buffer.clone(), streams)).unwrap();
         }
     }
     
@@ -834,7 +834,10 @@ impl PipeManagement {
 /// A collection of messages each thread understands.
 enum ThreadTxMessage {
     /// Used to send a buffer to be processed to a thread.
-    Buffer(Vec<u8>),
+    ///
+    /// The first argument is the buffer. The second is the number
+    /// of streams contained in the buffer.
+    Buffer(Vec<u8>, usize),
     /// Used to set a theta to a constant value for a single pipe.
     SetTheta(usize, Vec<f32>),
     /// Used to revert a pipe back to a value that is randomly choosen per buffer process operation.
@@ -881,8 +884,6 @@ fn main() {
 
     let seen_local = seen.clone();
 
-    let streams: usize = 2;
-
     for _ in 0..thread_count {
         let (atx, brx) = channel();
         let (btx, arx) = channel();
@@ -898,7 +899,7 @@ fn main() {
 
             loop {
                 match brx.recv().unwrap() {
-                    ThreadTxMessage::Buffer(buffer) => {
+                    ThreadTxMessage::Buffer(buffer, streams) => {
                         btx.send(stream::process_buffer(
                             &buffer,
                             &bit_error_table,
@@ -957,8 +958,23 @@ fn main() {
         Ok(mut stream) => {
             println!("connected");
             // We are expecting TWO interleaved streams from TWO antennas.
-            let mut buffer: Vec<u8> = vec![0; MODES_LONG_MSG_SAMPLES * 1024 * 8];
+            let mut buffer: Vec<u8> = vec![0; MODES_LONG_MSG_SAMPLES * 1024 * 16];
             let mut read: usize = 0;
+
+            // Read the number of streams.
+            let streams = match stream.read(&mut buffer[0..1]) {
+                Ok(bytes_read) if bytes_read > 0 => {
+                    buffer[0] as usize
+                },
+                Ok(bytes_read) => {
+                    panic!("Sample stream TCP connection returned zero bytes.");
+                },
+                Err(e) => {
+                    panic!("Error: {}", e);
+                }
+            };
+
+            println!("working with {} streams", streams);
 
             let sps: f64 = 2e6f64;
             let buffer_time: f64 = buffer.len() as f64 / 8.0f64 /  sps;
@@ -975,7 +991,7 @@ fn main() {
 
                         let mut hm: HashMap<usize, Message> = HashMap::new();
                         
-                        pipe_mgmt.send_buffer_to_all(&buffer);
+                        pipe_mgmt.send_buffer_to_all(&buffer, streams);
 
                         //println!("getting data from threads");
                         for rx in &rxs {
@@ -1088,7 +1104,7 @@ fn main() {
                             if elapsed > buffer_time * 0.95 {
                                 println!("elapsed:{} buffer_time:{} TOO SLOW!!! REDUCE CYCLES!!!", elapsed, buffer_time);
                             } else {
-                                //println!("elapsed:{} buffer_time:{}", elapsed, buffer_time);
+                                println!("elapsed:{} buffer_time:{}", elapsed, buffer_time);
                             }
                         }
 
