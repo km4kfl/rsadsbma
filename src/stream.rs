@@ -13,9 +13,8 @@ pub struct ProcessStreamResult {
     pub msg: Vec<u8>,
     pub samples: Vec<i16>,
     pub ndx: usize,
-    pub theta: f32,
-    pub amplitude_a: f32,
-    pub amplitude_b: f32,
+    pub thetas: Vec<f32>,
+    pub amplitudes: Vec<f32>,
 }
 
 /// Demodulates a message using `stream`.
@@ -30,9 +29,8 @@ pub struct ProcessStreamResult {
 pub fn process_stream_mfloat32(
     stream: &[f32],
     i16stream: &[i16],
-    theta: f32,
-    amplitude_a: f32,
-    amplitude_b: f32
+    thetas: &[f32],
+    amplitudes: &[f32]
 ) -> Vec<ProcessStreamResult> {
     let mut results: Vec<ProcessStreamResult> = Vec::new();
 
@@ -86,9 +84,8 @@ pub fn process_stream_mfloat32(
             msg: msg,
             samples: (&i16stream[x * 4..x * 4 + (constants::MODES_PREAMBLE_SAMPLES + constants::MODES_LONG_MSG_SAMPLES) * 4]).to_vec(),
             ndx: x,
-            theta: theta,
-            amplitude_a: amplitude_a,
-            amplitude_b: amplitude_b,
+            thetas: thetas.to_vec(),
+            amplitudes: amplitudes.to_vec(),
         });
     }
 
@@ -108,35 +105,58 @@ pub fn process_stream_mfloat32(
 pub fn process_buffer_single(
     u8_buffer: &[u8],
     bit_error_table: &HashMap<u32, u16>,
-    theta: f32,
-    amplitude_a: f32,
-    amplitude_b: f32,
+    thetas: &[f32],
+    amplitudes: &[f32],
+    streams: usize,
     seen: &Arc<Mutex<HashMap<u32, Instant>>>
-) -> Vec<Message> {
+) -> Vec<ProcessStreamResult> {
     let buffer: &[i16] = cast_slice(u8_buffer);
     let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / 4);
-    let ri = theta.cos();
-    let rq = theta.sin();
-    for x in 0..buffer.len() / 4 {
-        let ai: f32 = buffer[x*4+0] as f32 / 2049.0 * amplitude_a;
-        let aq: f32 = buffer[x*4+1] as f32 / 2049.0 * amplitude_a;
-        let bi: f32 = buffer[x*4+2] as f32 / 2049.0 * amplitude_b;
-        let bq: f32 = buffer[x*4+3] as f32 / 2049.0 * amplitude_b;
-        // multiply two complex numbers
-        // a = bi
-        // b = bq
-        // c = ri
-        // d = rq
-        // (a + ib)(c + id) = (ac - bd) + i(ad + bc)
-        // rotates b then adds b to a
-        let ci = bi * ri - bq * rq + ai;
-        let cq = bi * rq + bq * ri + aq;
-
-        mbuffer.push((ci * ci + cq * cq).sqrt());
+    
+    if amplitudes.len() != streams {
+        panic!("The number of amplitudes passed as part of Vec<f32> should be equal to the number of streams.")
     }
 
-    let results = process_stream_mfloat32(&mbuffer, &buffer, theta, amplitude_a, amplitude_b);
+    if thetas.len() != streams - 1 {
+        panic!("The number of theta passed as part of Vec<f32> should be minus 1 the number of streams.")
+    }
 
+    let mut riq: Vec<(f32, f32)> = Vec::with_capacity(streams - 1);
+
+    for theta in thetas {
+        riq.push((theta.cos(), theta.sin()));
+    }
+
+    //let ri = theta.cos();
+    //let rq = theta.sin();
+
+    let mul = streams * 2;
+
+    for x in 0..buffer.len() / 4 {
+        let mut ai: f32 = buffer[x * mul + 0] as f32 / 2049.0 * amplitudes[0];
+        let mut aq: f32 = buffer[x * mul + 1] as f32 / 2049.0 * amplitudes[0];
+        
+        for si in 1..streams {
+            let (ri, rq) = riq[si - 1];
+            let bi = buffer[x * mul + si * 2 + 0] as f32 / 2049.0 * amplitudes[si];
+            let bq = buffer[x * mul + si * 2 + 1] as f32 / 2049.0 * amplitudes[si];
+            // multiply two complex numbers
+            // a = bi
+            // b = bq
+            // c = ri
+            // d = rq
+            // (a + ib)(c + id) = (ac - bd) + i(ad + bc)
+            // rotates b then adds b to a
+            ai = bi * ri - bq * rq + ai;
+            aq = bi * rq + bq * ri + aq;
+        }
+
+        mbuffer.push((ai * ai + aq * aq).sqrt());
+    }
+
+    process_stream_mfloat32(&mbuffer, &buffer, thetas, amplitudes)
+
+    /*
     let mut out: Vec<Message> = Vec::new();
 
     for result in results {
@@ -147,12 +167,14 @@ pub fn process_buffer_single(
     }
 
     out
+    */
 }
 
 pub fn process_buffer(
     u8_buffer: &[u8],
     bit_error_table: &HashMap<u32, u16>,
-    pipe_theta: &Vec<Option<f32>>,
+    pipe_theta: &Vec<Option<Vec<f32>>>,
+    streams: usize,
     seen: &Arc<Mutex<HashMap<u32, Instant>>>
 ) -> Vec<Message> {
     let buffer: &[i16] = cast_slice(u8_buffer);
@@ -160,37 +182,39 @@ pub fn process_buffer(
     let mut rng = rand::thread_rng();
     let mut hm: HashMap<usize, ProcessStreamResult> = HashMap::new();
 
+    let mut thetas: Vec<f32> = Vec::with_capacity(streams - 1);
+    let mut amplitudes: Vec<f32> = Vec::with_capacity(streams);
+
+    // Default to 1.0 for amplitudes.
+    for _ in 0..streams {
+        amplitudes.push(1.0f32);
+    }
+
+    // This gets filled out later.
+    for _ in 1..streams {
+        thetas.push(0.0f32);
+    }
+
     for pipe_ndx in 0..pipe_theta.len() {
-        let theta = match &pipe_theta[pipe_ndx] {
-            None => rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI,
-            Some(theta) => *theta,
+        match &pipe_theta[pipe_ndx] {
+            None => {
+                // Assign random thetas for each element/stream.
+                for i in 0..streams - 1 {
+                    thetas[i] = rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI;
+                }
+            },
+            Some(thetas_other) => {
+                if thetas_other.len() != streams - 1 {
+                    panic!("Expected the count of thetas to be minus one the streams.")
+                }
+
+                for i in 0..streams - 1 {
+                    thetas[i] = thetas_other[i];
+                }
+            },
         };
 
-        //let amplitude: f32 = rng.r#gen::<f32>() * 2.0;
-        let amplitude_a: f32 = 1.0;
-        let amplitude_b: f32 = 1.0;
-
-        let ri = theta.cos();
-        let rq = theta.sin();
-        for x in 0..buffer.len() / 4 {
-            let ai: f32 = buffer[x*4+0] as f32 / 2049.0 * amplitude_a;
-            let aq: f32 = buffer[x*4+1] as f32 / 2049.0 * amplitude_a;
-            let bi: f32 = buffer[x*4+2] as f32 / 2049.0 * amplitude_b;
-            let bq: f32 = buffer[x*4+3] as f32 / 2049.0 * amplitude_b;
-            // multiply two complex numbers
-            // a = bi
-            // b = bq
-            // c = ri
-            // d = rq
-            // (a + ib)(c + id) = (ac - bd) + i(ad + bc)
-            // rotates b then adds b to a
-            let ci = bi * ri - bq * rq + ai;
-            let cq = bi * rq + bq * ri + aq;
-
-            mbuffer.push((ci * ci + cq * cq).sqrt());
-        }
-
-        let results = process_stream_mfloat32(&mbuffer, &buffer, theta, amplitude_a, amplitude_b);
+        let results = process_buffer_single(u8_buffer, bit_error_table, &thetas, &amplitudes, streams, seen);
 
         for result in results {
             match hm.get(&result.ndx) {

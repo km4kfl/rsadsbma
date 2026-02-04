@@ -33,6 +33,12 @@ mod stream;
 use constants::*;
 
 /// Members that are common to all messages.
+///
+/// This contains a lot of data useful for debugging and experimentation
+/// with the beamforming operation. For example, it contains the raw
+/// message bytes, raw samples from the card, theta used to process the
+/// samples, amplitudes of each antenna, and if the CRC was okay for the
+/// message.
 struct MessageCommon {
     /// The bytes that comprise the message after demodulation.
     msg: Vec<u8>,
@@ -40,19 +46,18 @@ struct MessageCommon {
     samples: Vec<i16>,
     /// The sample index the message was found at.
     ndx: usize,
-    /// The signal to noise ratio computed.
+    /// The computed signal to noise ratio.
     snr: f32,
-    /// The theta used during beamforming.
-    theta: f32,
-    /// The amplitude from antenna A used during beamforming.
-    amplitude_a: f32,
-    /// The amplitude from antenna B used during beamforming.
-    amplitude_b: f32,
+    /// The thetas used during beamforming.
+    thetas: Vec<f32>,
+    /// The amplitudes used during beamforming.
+    amplitudes: Vec<f32>,
     /// Was the CRC OK?
     crc_ok: bool,
 }
 
 impl fmt::Debug for MessageCommon {
+    /// This prevents the fields of this structure from being debug printed.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("MessageCommon").finish()
     }
@@ -71,10 +76,12 @@ struct Message {
 #[derive(Debug)]
 struct DfHeader1 {
     capability: u8,
+    /// The transponder address.
     addr: u32,
     metype: u8,
     mesub: u8,
     fs: u8,
+    /// The squawk code if any.
     identity: u32,
 }
 
@@ -124,6 +131,7 @@ enum MessageSpecific {
     Other,
 }
 
+/// A reason for not being able to decode a message.
 enum MessageErrorReason {
     /// This happens when the message can not be decoded because of errors.
     BitErrors,
@@ -262,10 +270,9 @@ fn process_result(
         msg: msg.clone(),
         ndx: result.ndx,
         snr: result.snr,
-        theta: result.theta,
+        thetas: result.thetas,
         samples: result.samples,
-        amplitude_a: result.amplitude_a,
-        amplitude_b: result.amplitude_b,
+        amplitudes: result.amplitudes,
         crc_ok: crc_ok,
     };
 
@@ -424,9 +431,16 @@ fn write_message_to_file(file: &mut File, m: &Message) {
     }
     file.write_all(bytes_of(&m.common.ndx)).unwrap();
     file.write_all(bytes_of(&m.common.snr)).unwrap();
-    file.write_all(bytes_of(&m.common.theta)).unwrap();
-    file.write_all(bytes_of(&m.common.amplitude_a)).unwrap();
-    file.write_all(bytes_of(&m.common.amplitude_b)).unwrap();
+    let thetas = &m.common.thetas;
+    file.write_all(bytes_of(&(thetas.len() as u8))).unwrap();
+    for theta in thetas {
+        file.write_all(bytes_of(theta)).unwrap();
+    }
+    let amplitudes = &m.common.amplitudes;
+    file.write_all(bytes_of(&(m.common.amplitudes.len() as u8))).unwrap();
+    for amp in amplitudes {
+        file.write_all(bytes_of(amp)).unwrap();
+    }
 }
 
 fn cpr_nl_function(mut lat: f32) -> f32 {
@@ -643,7 +657,7 @@ fn process_messages(
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.message_count += 1;
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+                //pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
             },
             MessageSpecific::AirborneVelocityMessage {
                 hdr, ew_dir, ew_velocity, ns_dir, ns_velocity, vert_rate_source, vert_rate_sign,
@@ -653,7 +667,7 @@ fn process_messages(
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.message_count += 1;
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+                //pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
             },
             MessageSpecific::AircraftIdenAndCat {
                 hdr,
@@ -668,7 +682,7 @@ fn process_messages(
                 ent.message_count += 1;
 
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+                //pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
             },
             MessageSpecific::AirbornePositionMessage {
                 hdr,
@@ -685,7 +699,7 @@ fn process_messages(
                 ent.message_count += 1;
 
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+                //pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
 
                 if f_flag {
                     ent.odd_cpr = Some((raw_lat, raw_lon, sample_index));
@@ -781,11 +795,11 @@ impl PipeManagement {
     fn set_addr_to_theta(
         &mut self,
         addr: u32,
-        theta: f32,
+        thetas: Vec<f32>,
     ) -> bool {
         match self.addr_to_pipe.get(&addr) {
             Some((thread_ndx, pipe_ndx)) => {
-                self.txs[*thread_ndx].send(ThreadTxMessage::SetTheta(*pipe_ndx, theta)).unwrap();
+                self.txs[*thread_ndx].send(ThreadTxMessage::SetTheta(*pipe_ndx, thetas)).unwrap();
                 true
             },
             None => {
@@ -795,7 +809,7 @@ impl PipeManagement {
                         let thread_ndx = x / self.pipe_count;
                         let pipe_ndx = x - thread_ndx * self.pipe_count;
                         self.addr_to_pipe.insert(addr, (thread_ndx, pipe_ndx));
-                        self.txs[thread_ndx].send(ThreadTxMessage::SetTheta(pipe_ndx, theta)).unwrap();
+                        self.txs[thread_ndx].send(ThreadTxMessage::SetTheta(pipe_ndx, thetas)).unwrap();
                         return true;
                     }
                 }
@@ -822,7 +836,7 @@ enum ThreadTxMessage {
     /// Used to send a buffer to be processed to a thread.
     Buffer(Vec<u8>),
     /// Used to set a theta to a constant value for a single pipe.
-    SetTheta(usize, f32),
+    SetTheta(usize, Vec<f32>),
     /// Used to revert a pipe back to a value that is randomly choosen per buffer process operation.
     UnsetTheta(usize),
 }
@@ -867,6 +881,8 @@ fn main() {
 
     let seen_local = seen.clone();
 
+    let streams: usize = 2;
+
     for _ in 0..thread_count {
         let (atx, brx) = channel();
         let (btx, arx) = channel();
@@ -878,7 +894,7 @@ fn main() {
         thread::spawn(move || {
             println!("spawned");
             let bit_error_table = crc::modes_init_error_info();
-            let mut pipe_theta: Vec<Option<f32>> = vec![None; cycle_count as usize];
+            let mut pipe_theta: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
 
             loop {
                 match brx.recv().unwrap() {
@@ -887,11 +903,12 @@ fn main() {
                             &buffer,
                             &bit_error_table,
                             &pipe_theta,
+                            streams,
                             &seen_thread
                         )).unwrap();
                     },
-                    ThreadTxMessage::SetTheta(pipe_ndx, theta) => {
-                        pipe_theta[pipe_ndx] = Some(theta);
+                    ThreadTxMessage::SetTheta(pipe_ndx, thetas) => {
+                        pipe_theta[pipe_ndx] = Some(thetas);
                     },
                     ThreadTxMessage::UnsetTheta(pipe_ndx) => {
                         pipe_theta[pipe_ndx] = None;
@@ -959,37 +976,6 @@ fn main() {
                         let mut hm: HashMap<usize, Message> = HashMap::new();
                         
                         pipe_mgmt.send_buffer_to_all(&buffer);
-
-                        // While we wait for the threads to finished process the buffer and only
-                        // turn on antenna A.
-                        {
-                            let items = stream::process_buffer_single(&buffer, &bit_error_table, 0.0, 1.0, 0.0, &seen_local);
-                            for message in items {
-                                match hm.get(&message.common.ndx) {
-                                    Some(other) => if other.common.snr < message.common.snr {
-                                        hm.insert(message.common.ndx, message);
-                                    },
-                                    None => {
-                                        hm.insert(message.common.ndx, message);
-                                    }
-                                }
-                            }
-                        }                        
-
-                        // Turn on only antenna B.
-                        {
-                            let items = stream::process_buffer_single(&buffer, &bit_error_table, 0.0, 0.0, 1.0, &seen_local);
-                            for message in items {
-                                match hm.get(&message.common.ndx) {
-                                    Some(other) => if other.common.snr < message.common.snr {
-                                        hm.insert(message.common.ndx, message);
-                                    },
-                                    None => {
-                                        hm.insert(message.common.ndx, message);
-                                    }
-                                }
-                            }
-                        }                          
 
                         //println!("getting data from threads");
                         for rx in &rxs {
