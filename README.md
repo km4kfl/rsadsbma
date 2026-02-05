@@ -51,6 +51,17 @@ Next, open a prompt and type `cargo run --release -- --thread-count 16 --cycle-c
 
 Finally, you should see messages about elapsed and buffer time. If it says `TOO SLOW` reduce the `--cycle-count`. At 5 second intervals it will print the statistics.
 
+# Antenna Placement
+
+You want each antenna to be within about half a wavelength. Since the current state of the program uses
+a random approach to beamforming you can setup the antennas in any kind of configuration. It may take
+some testing to find an optimal setup. I like the random approach because it isn't dependent on how you
+setup the antennas and it seems to outperform a single antenna setup by a significant factor. However,
+obviously it isn't the most optimal solution. 
+
+So feel free to setup the antenna as a uniform linear array, circular, or in a 2D configuration and
+then let me know the results at kburtes42@proton.me.
+
 # Map
 
 Thanks to obj!
