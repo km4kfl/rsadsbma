@@ -30,7 +30,8 @@ pub fn process_stream_mfloat32(
     stream: &[f32],
     i16stream: &[i16],
     thetas: &[f32],
-    amplitudes: &[f32]
+    amplitudes: &[f32],
+    streams: usize
 ) -> Vec<ProcessStreamResult> {
     let mut results: Vec<ProcessStreamResult> = Vec::new();
 
@@ -82,7 +83,7 @@ pub fn process_stream_mfloat32(
         results.push(ProcessStreamResult {
             snr: snr,
             msg: msg,
-            samples: (&i16stream[x * 4..x * 4 + (constants::MODES_PREAMBLE_SAMPLES + constants::MODES_LONG_MSG_SAMPLES) * 4]).to_vec(),
+            samples: (&i16stream[x * (streams * 2)..x * (streams * 2) + (constants::MODES_PREAMBLE_SAMPLES + constants::MODES_LONG_MSG_SAMPLES) * (streams * 2)]).to_vec(),
             ndx: x,
             thetas: thetas.to_vec(),
             amplitudes: amplitudes.to_vec(),
@@ -146,7 +147,8 @@ pub fn process_buffer_single_x4(
         &mbuffer,
         &buffer,
         &vec![thetas_b, thetas_c, thetas_d],
-        &vec![amplitude_a, amplitude_b, amplitude_c, amplitude_d]
+        &vec![amplitude_a, amplitude_b, amplitude_c, amplitude_d],
+        4
     )
 }
 
@@ -220,7 +222,7 @@ pub fn process_buffer_single(
         mbuffer.push((ai * ai + aq * aq).sqrt());
     }
 
-    process_stream_mfloat32(&mbuffer, &buffer, thetas, amplitudes)
+    process_stream_mfloat32(&mbuffer, &buffer, thetas, amplitudes, streams)
 }
 
 pub fn process_buffer(
