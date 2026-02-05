@@ -31,7 +31,7 @@ Finally, open your web browser and visit `http://localhost:8080` and replace `lo
 
 # Two BladeSDR Boards
 
-To use two BladeSDR boards, you need a micro SMB cable to connect the `CLKOUT` of the master card to the `CLKIN` of the slave. Next, you need a small jumper wire with female ends to connect pin J51[1] of the two
+To use two BladeSDR boards, you need a micro SMB cable to connect the `CLKOUT` (clock out) of the master card to the `CLKIN` (clock in) of the slave. Next, you need a small jumper wire with female ends to connect pin J51[1] of the two
 boards together. Then of course, you need your antennas setup which will be four of them.
 
 Then you run `bladesdr4x.py`. This will require two serial numbers since you need two boards. Pick one to be the master and the other the slave. The master should be the one with the cable connected to `CLKOUT` and the slave the one with the cable connected to `CLKIN`.
@@ -39,4 +39,4 @@ Then you run `bladesdr4x.py`. This will require two serial numbers since you nee
 To find pin `J51[1]` first turn the board so the stenciled lettering is oriented where you can read it. Now,
 look for the JTAG connector. The JTAG connector is ten pins oriented in two rows of five pins each. The `J51` connector is right above it and above it you will see the tiny letters J51. The first pin is on the left side and that is `J51[1]`. You can use any wire. I liked the little jumper wires that have a female end that fits nicely over the pin. You link both of these pins on both cards. This is the trigger pin. The master toggles the pin and this tells both cards to start streaming at the same instant. Well, it's close to the same instant but not perfect because obviously the electrical signal has a propogation speed.
 
-If you are looking for the `CLKIN` and `CLKOUT`. Hold the board the same way and look near the top center and they are beside each other. Make sure the master is `CLKOUT` because the program is going to configure it to output the clock signal and the slave will be configured to read the clock signal.
+If you are looking for the `CLKIN` (clock in) and `CLKOUT` (clock out). Hold the board the same way and look near the top center and they are beside each other. Make sure the master is `CLKOUT` because the program is going to configure it to output the clock signal and the slave will be configured to read the clock signal.
