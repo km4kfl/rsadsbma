@@ -92,6 +92,65 @@ pub fn process_stream_mfloat32(
     results
 }
 
+/// Does a single beamforming operation. Expects 4 streams of int16 IQ pairs.
+///
+/// This is a loop unrolled version of `process_buffer_single`. This was done
+/// to optimize for performance. The looped version was taking too much CPU
+/// time.
+pub fn process_buffer_single_x4(
+    u8_buffer: &[u8],
+    bit_error_table: &HashMap<u32, u16>,
+    thetas_b: f32,
+    thetas_c: f32,
+    thetas_d: f32,
+    amplitude_a: f32,
+    amplitude_b: f32,
+    amplitude_c: f32,
+    amplitude_d: f32,
+) -> Vec<ProcessStreamResult> {
+    let buffer: &[i16] = cast_slice(u8_buffer);
+    let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / (4 * 2));
+
+    let bri = thetas_b.cos();
+    let brq = thetas_b.sin();
+    let cri = thetas_c.cos();
+    let crq = thetas_c.sin();
+    let dri = thetas_d.cos();
+    let drq = thetas_d.sin();
+
+    for x in 0..buffer.len() / 8 {
+        let chunk = &buffer[x * 8..x * 8 + 8];
+        let ai: f32 =     chunk[0] as f32 / 2049.0 * amplitude_a;
+        let aq: f32 =     chunk[1] as f32 / 2049.0 * amplitude_a;
+        let mut bi: f32 = chunk[2] as f32 / 2049.0 * amplitude_b;
+        let mut bq: f32 = chunk[3] as f32 / 2049.0 * amplitude_b;
+        let mut ci: f32 = chunk[4] as f32 / 2049.0 * amplitude_c;
+        let mut cq: f32 = chunk[5] as f32 / 2049.0 * amplitude_c;
+        let mut di: f32 = chunk[6] as f32 / 2049.0 * amplitude_d;
+        let mut dq: f32 = chunk[7] as f32 / 2049.0 * amplitude_d;
+        
+        // Rotate the vectors by the thetas provided.
+        bi = bi * bri - bq * brq;
+        bq = bi * brq + bq * bri;
+        ci = bi * cri - cq * crq;
+        cq = ci * crq + cq * cri;
+        di = di * dri - dq * drq;
+        dq = di * drq + dq * dri;
+        // Sum the vectors.
+        let ei = ai + bi + ci + di;
+        let eq = aq + bq + cq + dq;
+        // Take the magnitude and store result.
+        mbuffer.push((ei * ei + eq * eq).sqrt());
+    }
+
+    process_stream_mfloat32(
+        &mbuffer,
+        &buffer,
+        &vec![thetas_b, thetas_c, thetas_d],
+        &vec![amplitude_a, amplitude_b, amplitude_c, amplitude_d]
+    )
+}
+
 /// Does a single beamforming operation on the interleaved two antenna stream.
 ///
 /// This function expects that `u8_buffer` is a stream of `i16` values where
@@ -107,12 +166,8 @@ pub fn process_buffer_single(
     bit_error_table: &HashMap<u32, u16>,
     thetas: &[f32],
     amplitudes: &[f32],
-    streams: usize,
-    seen: &Arc<Mutex<HashMap<u32, Instant>>>
-) -> Vec<ProcessStreamResult> {
-    let buffer: &[i16] = cast_slice(u8_buffer);
-    let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / 4);
-    
+    streams: usize
+) -> Vec<ProcessStreamResult> {    
     if amplitudes.len() != streams {
         panic!("The number of amplitudes passed as part of Vec<f32> should be equal to the number of streams.")
     }
@@ -120,6 +175,23 @@ pub fn process_buffer_single(
     if thetas.len() != streams - 1 {
         panic!("The number of theta passed as part of Vec<f32> should be minus 1 the number of streams.")
     }
+
+    if streams == 4 {
+        return process_buffer_single_x4(
+            u8_buffer,
+            bit_error_table,
+            thetas[0],
+            thetas[1],
+            thetas[2],
+            amplitudes[0],
+            amplitudes[1],
+            amplitudes[2],
+            amplitudes[3],
+        );
+    }
+
+    let buffer: &[i16] = cast_slice(u8_buffer);
+    let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / (streams * 2));
 
     let mut riq: Vec<(f32, f32)> = Vec::with_capacity(streams - 1);
 
@@ -214,7 +286,7 @@ pub fn process_buffer(
             },
         };
 
-        let results = process_buffer_single(u8_buffer, bit_error_table, &thetas, &amplitudes, streams, seen);
+        let results = process_buffer_single(u8_buffer, bit_error_table, &thetas, &amplitudes, streams);
 
         for result in results {
             match hm.get(&result.ndx) {
