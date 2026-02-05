@@ -44,7 +44,7 @@ struct MessageCommon {
     /// The raw I/Q samples.
     samples: Vec<i16>,
     /// The sample index the message was found at.
-    ndx: usize,
+    ndx: u64,
     /// The computed signal to noise ratio.
     snr: f32,
     /// The thetas used during beamforming.
@@ -277,7 +277,7 @@ fn process_result(
 
     let common = MessageCommon {
         msg: msg.clone(),
-        ndx: result.ndx,
+        ndx: result.ndx as u64,
         snr: result.snr,
         thetas: result.thetas,
         samples: result.samples,
@@ -650,7 +650,7 @@ fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
 /// the actual coordinates. There is still a lot more work that can be done here. All of
 /// this was copied from the `dump1090` implementation by antirez.
 fn process_messages(
-    messages: Vec<(usize, Message)>,
+    messages: Vec<(u64, Message)>,
     entities: &mut HashMap<u32, Entity>,
     buffer_start_sample_index: u64,
     _pipe_mgmt: &mut PipeManagement
@@ -1003,7 +1003,7 @@ fn main() {
                         //println!("sending buffer to threads");
                         let start = Instant::now();
 
-                        let mut hm: HashMap<usize, Message> = HashMap::new();
+                        let mut hm: HashMap<u64, Message> = HashMap::new();
                         
                         pipe_mgmt.send_buffer_to_all(&buffer, streams);
 
@@ -1031,8 +1031,15 @@ fn main() {
                             }
                         }
 
-                        let mut items: Vec<(usize, Message)> = hm.into_iter().collect();
+                        let mut items: Vec<(u64, Message)> = hm.into_iter().collect();
                         items.sort_by(|a, b| (&a.0).cmp(&b.0));
+                        
+                        // Update all indices to be global offsets. They come as offsets
+                        // into the buffer but since we track the total offset across all
+                        // buffers add them with the base `sample_index`.
+                        for (_, message) in &mut items {
+                            message.common.ndx += sample_index;
+                        }
 
                         for (_, message) in &items {
                             // Other generates too much because it isn't error checked.
