@@ -19,6 +19,8 @@ Finally, you should see messages about elapsed and buffer time. If it says `TOO 
 
 # Map
 
+Thanks to obj!
+
 You can use antirez's dump1090 as a map. The way you do it is first clone the repository. Make sure you have `Make`, `rtl-sdr-devel`, and `GCC` installed on Linux. If you do not have a Linux machine you can create a virtual machine using the free Oracle's VirtualBox. Next go into the directory that you cloned and type `make`. This will build the program. The program will be in the same directory under the name `dump1090`.
 
 https://github.com/antirez/dump1090/
