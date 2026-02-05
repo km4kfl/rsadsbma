@@ -40,3 +40,6 @@ To find pin `J51[1]` first turn the board so the stenciled lettering is oriented
 look for the JTAG connector. The JTAG connector is ten pins oriented in two rows of five pins each. The `J51` connector is right above it and above it you will see the tiny letters J51. The first pin is on the left side and that is `J51[1]`. You can use any wire. I liked the little jumper wires that have a female end that fits nicely over the pin. You link both of these pins on both cards. This is the trigger pin. The master toggles the pin and this tells both cards to start streaming at the same instant. Well, it's close to the same instant but not perfect because obviously the electrical signal has a propogation speed.
 
 If you are looking for the `CLKIN` (clock in) and `CLKOUT` (clock out). Hold the board the same way and look near the top center and they are beside each other. Make sure the master is `CLKOUT` because the program is going to configure it to output the clock signal and the slave will be configured to read the clock signal.
+
+https://www.nuand.com/libbladeRF-doc/v2.5.0/group___f_n___t_r_i_g.html
+https://www.nuand.com/libbladeRF-doc/v2.5.0/group___f_n___b_l_a_d_e_r_f2___l_o_w___l_e_v_e_l___c_l_o_c_k___b_u_f_f_e_r___o_u_t_p_u_t.html
