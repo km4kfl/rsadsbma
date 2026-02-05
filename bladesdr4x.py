@@ -49,7 +49,7 @@ def main(args):
             stream_timeout=40000
         )
 
-        for ch in [0]:
+        for ch in [0, 2]:
             dev.set_gain_mode(ch, bladerf._bladerf.GainMode.Manual)
             dev.set_bias_tee(ch, False)
             dev.set_bandwidth(ch, sps)
