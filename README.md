@@ -31,6 +31,8 @@ Finally, open your web browser and visit `http://localhost:8080` and replace `lo
 
 # Two BladeSDR Boards
 
+Using two boards allows you to have four coherent RX streams instead of only two. It should be possible to connect any number of boards together and you are not limited to only two.
+
 To use two BladeSDR boards, you need a micro SMB cable to connect the `CLKOUT` (clock out) of the master card to the `CLKIN` (clock in) of the slave. Next, you need a small jumper wire with female ends to connect pin J51[1] of the two
 boards together. Then of course, you need your antennas setup which will be four of them.
 
