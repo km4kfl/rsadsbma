@@ -5,7 +5,7 @@ use crate::process_result;
 use bytemuck::cast_slice;
 use rand::Rng;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Represents a message after demodulation but before decoding.
 pub struct ProcessStreamResult {
@@ -99,7 +99,6 @@ pub fn process_stream_mfloat32(
 /// time.
 pub fn process_buffer_single_x4(
     u8_buffer: &[u8],
-    bit_error_table: &HashMap<u32, u16>,
     thetas_b: f32,
     thetas_c: f32,
     thetas_d: f32,
@@ -132,7 +131,7 @@ pub fn process_buffer_single_x4(
         // Rotate the vectors by the thetas provided.
         bi = bi * bri - bq * brq;
         bq = bi * brq + bq * bri;
-        ci = bi * cri - cq * crq;
+        ci = ci * cri - cq * crq;
         cq = ci * crq + cq * cri;
         di = di * dri - dq * drq;
         dq = di * drq + dq * dri;
@@ -163,7 +162,6 @@ pub fn process_buffer_single_x4(
 /// the length to a multiple of 8. However, any odd bytes are just ignored.
 pub fn process_buffer_single(
     u8_buffer: &[u8],
-    bit_error_table: &HashMap<u32, u16>,
     thetas: &[f32],
     amplitudes: &[f32],
     streams: usize
@@ -179,7 +177,6 @@ pub fn process_buffer_single(
     if streams == 4 {
         return process_buffer_single_x4(
             u8_buffer,
-            bit_error_table,
             thetas[0],
             thetas[1],
             thetas[2],
@@ -198,9 +195,6 @@ pub fn process_buffer_single(
     for theta in thetas {
         riq.push((theta.cos(), theta.sin()));
     }
-
-    //let ri = theta.cos();
-    //let rq = theta.sin();
 
     let mul = streams * 2;
 
@@ -227,19 +221,6 @@ pub fn process_buffer_single(
     }
 
     process_stream_mfloat32(&mbuffer, &buffer, thetas, amplitudes)
-
-    /*
-    let mut out: Vec<Message> = Vec::new();
-
-    for result in results {
-        match process_result(result, bit_error_table, seen) {
-            Ok(message) => out.push(message),
-            Err(_) => (),
-        }        
-    }
-
-    out
-    */
 }
 
 pub fn process_buffer(
@@ -286,7 +267,7 @@ pub fn process_buffer(
             },
         };
 
-        let results = process_buffer_single(u8_buffer, bit_error_table, &thetas, &amplitudes, streams);
+        let results = process_buffer_single(u8_buffer, &thetas, &amplitudes, streams);
 
         for result in results {
             match hm.get(&result.ndx) {

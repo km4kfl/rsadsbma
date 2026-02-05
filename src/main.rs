@@ -4,14 +4,12 @@
 //! value as is. However, it might serve as a solid foundation or at the least an
 //! idea for a future project.
 //!
-//! Thanks to Salvatore Sanfilippo <antirez@gmail.com> and https://github.com/antirez/dump1090/
+//! Thanks to Salvatore Sanfilippo <antirez@gmail.com> and <https://github.com/antirez/dump1090/>
 //!
-//! Thanks to Malcolm Robb <support@attavionics.com> and https://github.com/MalcolmRobb/dump1090/
+//! Thanks to Malcolm Robb <support@attavionics.com> and <https://github.com/MalcolmRobb/dump1090/>
 //!
-//! Thanks to https://github.com/flightaware/dump1090
+//! Thanks to <https://github.com/flightaware/dump1090>
 
-use std::ascii::AsciiExt;
-use std::iter::Map;
 use std::sync::{Arc, Mutex};
 use std::io::Read;
 use std::net::TcpStream;
@@ -39,6 +37,7 @@ use constants::*;
 /// message bytes, raw samples from the card, theta used to process the
 /// samples, amplitudes of each antenna, and if the CRC was okay for the
 /// message.
+#[allow(dead_code)]
 struct MessageCommon {
     /// The bytes that comprise the message after demodulation.
     msg: Vec<u8>,
@@ -74,6 +73,7 @@ struct Message {
 
 /// Elements that are common to a few different specific message types.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct DfHeader1 {
     capability: u8,
     /// The transponder address.
@@ -90,11 +90,13 @@ struct DfHeader1 {
 /// specific to each message type here.
 #[derive(Debug)]
 enum MessageSpecific {
+    #[allow(dead_code)]
     AircraftIdenAndCat {
         hdr: DfHeader1,
         aircraft_type: u8,
         flight: Vec<char>,
     },
+    #[allow(dead_code)]
     SurfacePositionMessage {
         hdr: DfHeader1,
         movement: u8,
@@ -104,6 +106,7 @@ enum MessageSpecific {
         raw_lat: u32,
         raw_lon: u32,
     },
+    #[allow(dead_code)]
     AirbornePositionMessage {
         hdr: DfHeader1,
         f_flag: bool,
@@ -112,6 +115,7 @@ enum MessageSpecific {
         raw_lat: u32,
         raw_lon: u32,
     },
+    #[allow(dead_code)]
     AirborneVelocityMessage {
         hdr: DfHeader1,
         ew_dir: u8,
@@ -124,6 +128,7 @@ enum MessageSpecific {
         velocity: f32,
         heading: f32,
     },
+    #[allow(dead_code)]
     AirborneVelocityMessageShort {
         hdr: DfHeader1,
         heading: f32,
@@ -250,8 +255,8 @@ fn process_result(
     let metype = msg[4] >> 3;
     let mesub = msg[4] & 7;
     let fs = msg[0] & 7;
-    let dr = msg[1] >> 3 & 31;
-    let um = ((msg[1] & 7) << 3) | (msg[2] >> 5);
+    let _dr = msg[1] >> 3 & 31;
+    let _um = ((msg[1] & 7) << 3) | (msg[2] >> 5);
 
     let identity: u32;
     {
@@ -648,14 +653,15 @@ fn process_messages(
     messages: Vec<(usize, Message)>,
     entities: &mut HashMap<u32, Entity>,
     buffer_start_sample_index: u64,
-    pipe_mgmt: &mut PipeManagement
+    _pipe_mgmt: &mut PipeManagement
 ) {
     for (buffer_sample_index, m) in messages {
         let sample_index = buffer_sample_index as u64 + buffer_start_sample_index;
 
         match m.specific {
             MessageSpecific::AirborneVelocityMessageShort {
-                hdr, heading
+                hdr,
+                heading: _
             } => {
                 init_entity_if_not(hdr.addr, entities);
                 let ent = entities.get_mut(&hdr.addr).unwrap();
@@ -664,8 +670,16 @@ fn process_messages(
                 //pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
             },
             MessageSpecific::AirborneVelocityMessage {
-                hdr, ew_dir, ew_velocity, ns_dir, ns_velocity, vert_rate_source, vert_rate_sign,
-                vert_rate, velocity, heading
+                hdr, 
+                ew_dir: _,
+                ew_velocity: _,
+                ns_dir: _,
+                ns_velocity: _,
+                vert_rate_source: _,
+                vert_rate_sign: _,
+                vert_rate: _,
+                velocity: _,
+                heading: _
             } => {
                 init_entity_if_not(hdr.addr, entities);
                 let ent = entities.get_mut(&hdr.addr).unwrap();
@@ -691,7 +705,7 @@ fn process_messages(
             MessageSpecific::AirbornePositionMessage {
                 hdr,
                 f_flag,
-                t_flag,
+                t_flag: _,
                 altitude,
                 raw_lat,
                 raw_lon,
@@ -886,8 +900,6 @@ fn main() {
     let mut rxs: Vec<Receiver<Vec<Message>>> = Vec::new();
     let seen: Arc<Mutex<HashMap<u32, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    let seen_local = seen.clone();
-
     for _ in 0..thread_count {
         let (atx, brx) = channel();
         let (btx, arx) = channel();
@@ -930,8 +942,6 @@ fn main() {
         None => None,
     };
 
-    let bit_error_table = crc::modes_init_error_info();
-
     let mut entities: HashMap<u32, Entity> = HashMap::new();
 
     let mut sample_index: u64 = 0;
@@ -947,7 +957,7 @@ fn main() {
     let mut net_raw_out_stream: Option<TcpStream> = match args.net_raw_out {
         None => None,
         Some(addr) => match TcpStream::connect(addr.clone()) {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 println!("connected to --net-raw-out {}", addr);
                 Some(stream)
             },
@@ -970,7 +980,7 @@ fn main() {
                 Ok(bytes_read) if bytes_read > 0 => {
                     buffer[0] as usize
                 },
-                Ok(bytes_read) => {
+                Ok(_) => {
                     panic!("Sample stream TCP connection returned zero bytes.");
                 },
                 Err(e) => {
