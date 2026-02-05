@@ -1,3 +1,37 @@
+# What Does It Do
+
+This project demodulates, partially decodes, and does CRC checking. It allows one to recieve ADS-B transmission on 1090MHZ. These are transmissions sent by airplanes that fly high in the sky. You can
+use it to track these aircraft. It enables you to also use dump1090, another project, which provides
+a real-time map. See the section Map for more information.
+
+The purpose of this project was not to replace the many others but to do some experimenting with
+beamforming which is where the signals from two or more antennas, part of an array, are mixed 
+together to form directivity. The directivity allows software to aim at different parts of the sky
+for improved SNR and when it works well allows one to find, demodulate, and decode messages that
+would have otherwise been lost to a single antenna system.
+
+Here are some other projects which are more full featured.
+
+https://github.com/wiedehopf/readsb
+
+https://github.com/mgrone/stream1090
+
+https://github.com/antirez/dump1090
+
+https://github.com/flightaware/dump1090
+
+You can also search the Internet for ADS-B, RTL-SDR, and you should find many articles, how tos, and
+other things to read about the activity.
+
+# Discussion
+
+https://discussions.flightaware.com/
+
+You can find a lot of people who can offer help with hardware. This project was designed primarily
+for the BladeSDR but it could be used with other cards that support multiple coherent channels simply
+by changing the frontend script. However, at the link above you will find resources for using other
+cheaper cards for ADS-B.
+
 # Needs
 
 You need Python 3.x, BladeRF library, and Rustup installed.
@@ -44,4 +78,5 @@ look for the JTAG connector. The JTAG connector is ten pins oriented in two rows
 If you are looking for the `CLKIN` (clock in) and `CLKOUT` (clock out). Hold the board the same way and look near the top center and they are beside each other. Make sure the master is `CLKOUT` because the program is going to configure it to output the clock signal and the slave will be configured to read the clock signal.
 
 https://www.nuand.com/libbladeRF-doc/v2.5.0/group___f_n___t_r_i_g.html
+
 https://www.nuand.com/libbladeRF-doc/v2.5.0/group___f_n___b_l_a_d_e_r_f2___l_o_w___l_e_v_e_l___c_l_o_c_k___b_u_f_f_e_r___o_u_t_p_u_t.html
