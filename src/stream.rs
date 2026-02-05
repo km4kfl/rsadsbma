@@ -257,6 +257,10 @@ pub fn process_buffer(
                 for i in 0..streams - 1 {
                     thetas[i] = rng.r#gen::<f32>() * std::f32::consts::PI * 2.0f32 - std::f32::consts::PI;
                 }
+
+                for i in 0..streams {
+                    amplitudes[i] = rng.r#gen::<f32>();
+                }
             },
             Some(thetas_other) => {
                 if thetas_other.len() != streams - 1 {
