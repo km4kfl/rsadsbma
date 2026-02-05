@@ -215,38 +215,10 @@ fn process_result(
         crc_ok = crc_syndrome == 0;
     }
 
-    // Here is where you want to do your decoding. I just simply
-    // copied the parameters over and set a marker for each message
-    // type.
-
-    let ca = msg[0] & 7;
     let aa1 = msg[1];
     let aa2 = msg[2];
     let aa3 = msg[3];
-    let metype = msg[4] >> 3;
-    let mesub = msg[4] & 7;
-    let fs = msg[0] & 7;
-    let dr = msg[1] >> 3 & 31;
-    let um = ((msg[1] & 7) << 3) | (msg[2] >> 5);
-
-    let addr = ((aa1 as u32) << 16) | ((aa2 as u32) << 8) | aa3 as u32;
-
-    let identity: u32;
-    {
-        let a = ((msg[3] & 0x80) >> 5) |
-                ((msg[2] & 0x02) >> 0) |
-                ((msg[2] & 0x08) >> 3);
-        let b = ((msg[3] & 0x02) << 1) |
-                ((msg[3] & 0x08) >> 2) |
-                ((msg[3] & 0x20) >> 5);
-        let c = ((msg[2] & 0x01) << 2) |
-                ((msg[2] & 0x04) >> 1) |
-                ((msg[2] & 0x10) >> 4);
-        let d = ((msg[3] & 0x01) << 2) |
-                ((msg[3] & 0x04) >> 1) |
-                ((msg[3] & 0x10) >> 4);
-        identity = a as u32 * 1000 + b as u32 * 100 + c as u32 * 10 + d as u32;
-    }
+    let addr = ((aa1 as u32) << 16) | ((aa2 as u32) << 8) | aa3 as u32;    
 
     if msgtype != 11 && msgtype != 17 && msgtype != 18 {
         if brute_force_ap(&msg, seen) {
@@ -264,6 +236,38 @@ fn process_result(
                 crc_ok = true;
             }
         }
+    }
+
+    if !crc_ok {
+        return Err(MessageErrorReason::BitErrors);
+    }
+
+    // Here is where you want to do your decoding. I just simply
+    // copied the parameters over and set a marker for each message
+    // type.
+
+    let ca = msg[0] & 7;
+    let metype = msg[4] >> 3;
+    let mesub = msg[4] & 7;
+    let fs = msg[0] & 7;
+    let dr = msg[1] >> 3 & 31;
+    let um = ((msg[1] & 7) << 3) | (msg[2] >> 5);
+
+    let identity: u32;
+    {
+        let a = ((msg[3] & 0x80) >> 5) |
+                ((msg[2] & 0x02) >> 0) |
+                ((msg[2] & 0x08) >> 3);
+        let b = ((msg[3] & 0x02) << 1) |
+                ((msg[3] & 0x08) >> 2) |
+                ((msg[3] & 0x20) >> 5);
+        let c = ((msg[2] & 0x01) << 2) |
+                ((msg[2] & 0x04) >> 1) |
+                ((msg[2] & 0x10) >> 4);
+        let d = ((msg[3] & 0x01) << 2) |
+                ((msg[3] & 0x04) >> 1) |
+                ((msg[3] & 0x10) >> 4);
+        identity = a as u32 * 1000 + b as u32 * 100 + c as u32 * 10 + d as u32;
     }
 
     let common = MessageCommon {
