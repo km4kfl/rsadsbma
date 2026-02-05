@@ -14,10 +14,12 @@ from bladeandnumpy import BladeRFAndNumpy
 def main(args):
     sps = 2000000
 
+    # 9da, e85
+
     print('opening master')
-    dev_master = BladeRFAndNumpy(f'libusb:serial=9da')
+    dev_master = BladeRFAndNumpy(f'libusb:serial={args.serial_master}')
     print('opening slave')
-    dev_slave = BladeRFAndNumpy(f'libusb:serial=e85')
+    dev_slave = BladeRFAndNumpy(f'libusb:serial={args.serial_slave}')
 
     buffer_samps = 16 * 1024 * 32
 
@@ -125,6 +127,6 @@ if __name__ == '__main__':
     ap = argparse.ArgumentParser(
         description='Listens on 1090MHZ. Writes samples to connected client.'
     )
-    #ap.add_argument('--serial', type=str, required=True, help='The first few unambigious letters of the serial for the card to use.')
-    #ap.add_argument('--freq-offset', type=float, required=True, help='Any offset for correction otherwise zero.')
+    ap.add_argument('--serial-master', type=str, required=True, help='The first few unambigious letters of the serial for the card to use.')
+    ap.add_argument('--serial-slave', type=str, required=True, help='The first few unambigious letters of the serial for the card to use.')
     main(ap.parse_args())
