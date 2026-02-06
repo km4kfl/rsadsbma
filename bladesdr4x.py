@@ -68,8 +68,12 @@ def main(args):
     qm = queue.Queue()
     qs = queue.Queue()
 
-    master_thread = threading.Thread(target = reader_thread, args=(dev_master, qm))
-    slave_thread = threading.Thread(target = reader_thread, args=(dev_slave, qs))
+    master_thread = threading.Thread(
+        target = reader_thread, args=(dev_master, qm), daemon=True
+    )
+    slave_thread = threading.Thread(
+        target = reader_thread, args=(dev_slave, qs), daemon=True
+    )
 
     print('...about to fire the trigger')
     time.sleep(1)
