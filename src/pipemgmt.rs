@@ -65,15 +65,15 @@ impl PipeManagement {
     ///          not unset the pipe.
     pub fn set_pipe_to_theta(&mut self, pipe_ndx: usize, addr: u32, thetas: Option<Vec<f32>>) {
         let thread_ndx = pipe_ndx / self.pipe_count;
-        let pipe_ndx = pipe_ndx - thread_ndx * self.pipe_count;
+        let local_pipe_ndx = pipe_ndx - thread_ndx * self.pipe_count;
         match thetas {
             Some(v) => {
                 self.pipe_to_addr[pipe_ndx] = Some(addr);
-                self.txs[thread_ndx].send(ThreadTxMessage::SetTheta(pipe_ndx, v)).unwrap();
+                self.txs[thread_ndx].send(ThreadTxMessage::SetTheta(local_pipe_ndx, v)).unwrap();
             },
             None => {
                 self.pipe_to_addr[pipe_ndx] = None;
-                self.txs[thread_ndx].send(ThreadTxMessage::UnsetTheta(pipe_ndx)).unwrap();
+                self.txs[thread_ndx].send(ThreadTxMessage::UnsetTheta(local_pipe_ndx)).unwrap();
             },
         }
     }
