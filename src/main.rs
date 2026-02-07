@@ -495,7 +495,9 @@ impl Entity {
         self.theta_avg()
     }
 
-    /// Return the average of the elements of the `thetas` array.
+    /// Return the weighted average of the elements of the `thetas` array.
+    ///
+    /// The SNR weights the average.
     fn theta_avg(&self) -> Vec<f32> {
         let mut sum: Vec<f32> = Vec::with_capacity(self.thetas[0].len());
 
@@ -519,6 +521,15 @@ impl Entity {
         sum
     }
 
+    /// Check if the pipe_ndx, likely from a message, is currently the target for the address.
+    ///
+    /// When we trying to track a transponder we try to compute a steering vector. If there are
+    /// any free pipes we set that pipe to the steering vector calculated. This checks if the
+    /// `pipe_ndx` was the pipe being used and if so we consider the message to have arrived
+    /// from this pipe and increment the `inbeam` count.
+    ///
+    /// In a shorter explanation, we keep track of how effective the computed steering vector
+    /// is by counting how many hits it gets.
     fn check_if_in_beam(&mut self, pipe_mgmt: &mut PipeManagement, pipe_ndx: usize) {
         match pipe_mgmt.get_addr_pipe_ndx(self.addr) {
             Some(stored_pipe_ndx) => {
@@ -957,12 +968,19 @@ fn main() {
                             }
                             
                             println!(
-                                "ADDR    ALT      LAT        LON       COUNT   INBEAM  STEERING VECTOR"
+                                "ADDR   FLIGHT    ALT      LAT        LON       COUNT    INBEAM  STEERING VECTOR"
                             );
+
                             for (addr, ent) in entities.iter() {
+                                let flight = match &ent.flight {
+                                    None => String::from(" "),
+                                    Some(v) => v.into_iter().collect::<String>(),
+                                };
+
                                 println!(
-                                    "{:6x} {:>8.1} {:>10.4} {:>10.4} {:0>7} {:>7} {:?}",
+                                    "{:6x} {:>8} {:>8.1} {:>10.4} {:>10.4} {:0>7} {:>7} {:?}",
                                     addr,
+                                    flight,
                                     ent.alt.unwrap_or(0.0),
                                     ent.lat.unwrap_or(0.0),
                                     ent.lon.unwrap_or(0.0),
