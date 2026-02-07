@@ -781,10 +781,10 @@ fn main() {
                             base_pipe_ndx
                         )).unwrap();
                     },
-                    ThreadTxMessage::SetTheta(pipe_ndx, thetas) => {
+                    ThreadTxMessage::SetWeights(pipe_ndx, thetas) => {
                         pipe_theta[pipe_ndx] = Some(thetas);
                     },
-                    ThreadTxMessage::UnsetTheta(pipe_ndx) => {
+                    ThreadTxMessage::UnsetWeights(pipe_ndx) => {
                         pipe_theta[pipe_ndx] = None;
                     },
                 }

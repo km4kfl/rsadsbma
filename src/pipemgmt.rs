@@ -51,7 +51,7 @@ impl PipeManagement {
             Some((thread_ndx, pipe_ndx)) => {
                 self.addr_to_pipe.remove(&addr);
                 self.pipe_to_addr[thread_ndx * self.pipe_count + pipe_ndx] = None;
-                self.txs[thread_ndx].send(ThreadTxMessage::UnsetTheta(pipe_ndx)).unwrap();
+                self.txs[thread_ndx].send(ThreadTxMessage::UnsetWeights(pipe_ndx)).unwrap();
             }
         }
     }
@@ -69,11 +69,11 @@ impl PipeManagement {
         match thetas {
             Some(v) => {
                 self.pipe_to_addr[pipe_ndx] = Some(addr);
-                self.txs[thread_ndx].send(ThreadTxMessage::SetTheta(local_pipe_ndx, v)).unwrap();
+                self.txs[thread_ndx].send(ThreadTxMessage::SetWeights(local_pipe_ndx, v)).unwrap();
             },
             None => {
                 self.pipe_to_addr[pipe_ndx] = None;
-                self.txs[thread_ndx].send(ThreadTxMessage::UnsetTheta(local_pipe_ndx)).unwrap();
+                self.txs[thread_ndx].send(ThreadTxMessage::UnsetWeights(local_pipe_ndx)).unwrap();
             },
         }
     }
@@ -95,7 +95,7 @@ impl PipeManagement {
     ) -> bool {
         match self.addr_to_pipe.get(&addr) {
             Some((thread_ndx, pipe_ndx)) => {
-                self.txs[*thread_ndx].send(ThreadTxMessage::SetTheta(*pipe_ndx, thetas)).unwrap();
+                self.txs[*thread_ndx].send(ThreadTxMessage::SetWeights(*pipe_ndx, thetas)).unwrap();
                 true
             },
             None => {
@@ -105,7 +105,7 @@ impl PipeManagement {
                         let thread_ndx = x / self.pipe_count;
                         let pipe_ndx = x - thread_ndx * self.pipe_count;
                         self.addr_to_pipe.insert(addr, (thread_ndx, pipe_ndx));
-                        self.txs[thread_ndx].send(ThreadTxMessage::SetTheta(pipe_ndx, thetas)).unwrap();
+                        self.txs[thread_ndx].send(ThreadTxMessage::SetWeights(pipe_ndx, thetas)).unwrap();
                         return true;
                     }
                 }
@@ -135,7 +135,7 @@ pub enum ThreadTxMessage {
     /// of streams contained in the buffer.
     Buffer(Vec<u8>, usize),
     /// Used to set a theta to a constant value for a single pipe.
-    SetTheta(usize, Vec<f32>),
+    SetWeights(usize, Vec<f32>),
     /// Used to revert a pipe back to a value that is randomly choosen per buffer process operation.
-    UnsetTheta(usize),
+    UnsetWeights(usize),
 }
