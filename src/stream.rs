@@ -225,6 +225,12 @@ pub fn process_buffer_single(
     process_stream_mfloat32(&mbuffer, &buffer, thetas, amplitudes, streams)
 }
 
+/// Process buffer using many iterations and translate results into messages.
+///
+/// This function uses many randomized iterations to process the buffer to
+/// look for messages. It also supports setting a custom set of thetas for
+/// each pipe/cycle. At the end, it translate the raw bytes into a message
+/// format.
 pub fn process_buffer(
     u8_buffer: &[u8],
     bit_error_table: &HashMap<u32, u16>,
@@ -259,7 +265,7 @@ pub fn process_buffer(
                 }
 
                 for i in 0..streams {
-                    amplitudes[i] = rng.r#gen::<f32>();
+                    amplitudes[i] = 1.0; //rng.r#gen::<f32>();
                 }
             },
             Some(thetas_other) => {
@@ -270,6 +276,10 @@ pub fn process_buffer(
                 for i in 0..streams - 1 {
                     thetas[i] = thetas_other[i];
                 }
+
+                for i in 0..streams {
+                    amplitudes[i] = 1.0;
+                }                
             },
         };
 
