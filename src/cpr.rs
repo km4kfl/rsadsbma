@@ -1,4 +1,6 @@
 //! This module contains code that works with the compact position format.
+//!
+//! Thanks to antirez! <https://github.com/antirez/dump1090>
 
 pub fn cpr_nl_function(mut lat: f32) -> f32 {
     if lat < 0.0 {
@@ -90,6 +92,12 @@ pub fn cpr_dlon_function(lat: f32, isodd: f32) -> f32 {
 }
 
 /// Returns latitude and longitude or None if computation is not possible.
+///
+/// The `event` and `odd` format is (raw_latitude, raw_longitude, timestamp). The
+/// timestamp ensures the calculation is done in the right order. The raw latitude
+/// and longitude and straight from the decoding of the messages.
+///
+/// This is a copy of antirez's implementation.
 pub fn decode_cpr(even: (u32, u32, u64), odd: (u32, u32, u64)) -> Option<(f32, f32)> {
     let air_dlat0: f32 = 360.0 / 60.0;
     let air_dlat1: f32 = 360.0 / 59.0;
