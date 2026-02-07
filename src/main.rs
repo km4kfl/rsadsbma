@@ -484,7 +484,7 @@ struct Entity {
 
 impl Entity {
     /// Push new theta, pop any over `num` size, and return the average of the remaining theta elements.
-    fn push_theta_cap_avg(&mut self, snr: f32, thetas: Vec<f32>, num: usize) -> Vec<f32> {
+    fn push_theta_cap_avg(&mut self, snr: f32, thetas: Vec<f32>, num: usize, snr_scaler: f32) -> Vec<f32> {
         self.thetas.push_front(thetas);
         self.snrs.push_front(snr);
         while self.thetas.len() > num {
@@ -492,13 +492,13 @@ impl Entity {
             self.snrs.pop_back();
         }
 
-        self.theta_avg()
+        self.theta_avg(snr_scaler)
     }
 
     /// Return the weighted average of the elements of the `thetas` array.
     ///
     /// The SNR weights the average.
-    fn theta_avg(&self) -> Vec<f32> {
+    fn theta_avg(&self, snr_scaler: f32) -> Vec<f32> {
         let mut sum: Vec<f32> = Vec::with_capacity(self.thetas[0].len());
 
         let mut total = 0.0f32;
@@ -509,9 +509,9 @@ impl Entity {
 
         for y in 0..self.thetas.len() {
             for x in 0..sum.len() {
-                sum[x] += self.thetas[y][x] * self.snrs[y];
+                sum[x] += self.thetas[y][x] * self.snrs[y] * snr_scaler;
             }
-            total += self.snrs[y];
+            total += self.snrs[y] * snr_scaler;
         }
         
         for x in 0..sum.len() {
@@ -575,7 +575,9 @@ fn process_messages(
     messages: Vec<(u64, Message)>,
     entities: &mut HashMap<u32, Entity>,
     buffer_start_sample_index: u64,
-    pipe_mgmt: &mut PipeManagement
+    pipe_mgmt: &mut PipeManagement,
+    snr_scaler: f32,
+    weighted_avg_depth: usize
 ) {
     for (buffer_sample_index, m) in messages {
         let sample_index = buffer_sample_index as u64 + buffer_start_sample_index;
@@ -592,7 +594,10 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
+                pipe_mgmt.set_addr_to_theta(
+                    hdr.addr,
+                    ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler)
+                );
             },
             MessageSpecific::AirborneVelocityMessage {
                 hdr, 
@@ -613,7 +618,10 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
                 
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
+                pipe_mgmt.set_addr_to_theta(
+                    hdr.addr,
+                    ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler)
+                );
             },
             MessageSpecific::AircraftIdenAndCat {
                 hdr,
@@ -630,7 +638,10 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
+                pipe_mgmt.set_addr_to_theta(
+                    hdr.addr,
+                    ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler)
+                );
             },
             MessageSpecific::AirbornePositionMessage {
                 hdr,
@@ -649,7 +660,10 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
+                pipe_mgmt.set_addr_to_theta(
+                    hdr.addr,
+                    ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler)
+                );
 
                 if f_flag {
                     ent.odd_cpr = Some((raw_lat, raw_lon, sample_index));
@@ -711,6 +725,16 @@ struct Args {
     /// Uniform Linear Array mode. Provide the spacing of the elements in wavelength. Use 0.5 for half a wavelength.
     #[arg(short, long)]
     ula_spacing_wavelength: Option<f32>,
+
+    /// Scales the SNR's weight in the weighted average.
+    #[arg(short, long)]
+    #[clap(default_value_t = 1.0)]
+    snr_scaler: f32,
+
+    /// The depth or count of the items used in the rolling average calculation for the tracking steering vector.
+    #[arg(short, long)]
+    #[clap(default_value_t = 10)]
+    weighted_avg_depth: usize
 }
 
 fn main() {
@@ -892,6 +916,7 @@ fn main() {
                         }
 
                         let mut items: Vec<(u64, Message)> = hm.into_iter().collect();
+                        // They might be out of order so sort them to ensure they are ordered.
                         items.sort_by(|a, b| (&a.0).cmp(&b.0));
                         
                         // Update all indices to be global offsets. They come as offsets
@@ -902,7 +927,6 @@ fn main() {
                         }
 
                         for (_, message) in &items {
-                            // Other generates too much because it isn't error checked.
                             match message.specific {
                                 MessageSpecific::AircraftIdenAndCat { .. } => stat_aiac += 1,
                                 MessageSpecific::SurfacePositionMessage { .. } => stat_spm += 1,
@@ -912,6 +936,10 @@ fn main() {
                                 _ => (),
                             }
 
+                            // This is used to send the raw data in HEX format over a socket. The
+                            // primary use case for this is when providing the argument --net-raw-out
+                            // for a dump1090 instance running in --net-only mode so you can have a
+                            // webpage map of the aircraft.
                             match net_raw_out_stream {
                                 None => (),
                                 Some(ref mut stream) => {
@@ -927,6 +955,10 @@ fn main() {
                                 },
                             }
 
+                            // This is used when the --file-output argument is specified. It writes the
+                            // raw messages and associated data to a file in a serialized format. See
+                            // the function `write_message_to_file` for a detailed overview of the
+                            // format used.
                             match message.specific {
                                 MessageSpecific::Other => (),
                                 _ => {
@@ -940,7 +972,17 @@ fn main() {
                             }                            
                         }
 
-                        process_messages(items, &mut entities, sample_index, &mut pipe_mgmt);
+                        // The message have been demodulated and decoded. Process them to produce
+                        // an aircraft entity with attached information. This also computes a
+                        // steering vector to try to track the aircraft with the antenna system.
+                        process_messages(
+                            items,
+                            &mut entities,
+                            sample_index,
+                            &mut pipe_mgmt,
+                            args.snr_scaler,
+                            args.weighted_avg_depth
+                        );
 
                         if (Instant::now() - stat_start).as_secs() > 5 {
                             stat_start = Instant::now();
@@ -987,7 +1029,7 @@ fn main() {
                                     ent.message_count,
                                     // How many messages were picked from the calculated steering vector.
                                     ent.inbeam,
-                                    ent.theta_avg()
+                                    ent.theta_avg(args.snr_scaler)
                                 );
                             }
 
