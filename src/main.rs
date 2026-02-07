@@ -23,6 +23,7 @@ use clap::Parser;
 use std::fs::File;
 use std::io::prelude::*;
 use std::fmt;
+use std::f32::consts::PI;
 
 mod crc;
 mod constants;
@@ -598,13 +599,13 @@ struct Entity {
     aircraft_type: Option<u8>,
     last_update: u64,
     message_count: u64,
-    thetas: VecDeque<f32>,
+    thetas: VecDeque<Vec<f32>>,
 }
 
 impl Entity {
     /// Push new theta, pop any over `num` size, and return the average of the remaining theta elements.
-    fn push_theta_cap_avg(&mut self, theta: f32, num: usize) -> f32 {
-        self.thetas.push_front(theta);
+    fn push_theta_cap_avg(&mut self, thetas: Vec<f32>, num: usize) -> Vec<f32> {
+        self.thetas.push_front(thetas);
         while self.thetas.len() > num {
             self.thetas.pop_back();
         }
@@ -613,13 +614,24 @@ impl Entity {
     }
 
     /// Return the average of the elements of the `thetas` array.
-    fn theta_avg(&self) -> f32 {
-        let mut sum = 0.0f32;
+    fn theta_avg(&self) -> Vec<f32> {
+        let mut sum: Vec<f32> = Vec::with_capacity(self.thetas[0].len());
+
+        for x in 0..self.thetas[0].len() {
+            sum.push(0.0);
+        }
+
         for t in self.thetas.iter() {
-            sum += t;
+            for x in 0..sum.len() {
+                sum[x] += t[x];
+            }
         }
         
-        sum / self.thetas.len() as f32        
+        for x in 0..sum.len() {
+            sum[x] /= self.thetas.len() as f32;
+        }
+        
+        sum
     }
 }
 
@@ -653,7 +665,7 @@ fn process_messages(
     messages: Vec<(u64, Message)>,
     entities: &mut HashMap<u32, Entity>,
     buffer_start_sample_index: u64,
-    _pipe_mgmt: &mut PipeManagement
+    pipe_mgmt: &mut PipeManagement
 ) {
     for (buffer_sample_index, m) in messages {
         let sample_index = buffer_sample_index as u64 + buffer_start_sample_index;
@@ -667,7 +679,7 @@ fn process_messages(
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.message_count += 1;
                 // Update get average set a pipe or existing pipe.
-                //pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.thetas, 10));
             },
             MessageSpecific::AirborneVelocityMessage {
                 hdr, 
@@ -685,7 +697,7 @@ fn process_messages(
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.message_count += 1;
                 // Update get average set a pipe or existing pipe.
-                //pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.thetas, 10));
             },
             MessageSpecific::AircraftIdenAndCat {
                 hdr,
@@ -700,7 +712,7 @@ fn process_messages(
                 ent.message_count += 1;
 
                 // Update get average set a pipe or existing pipe.
-                //pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.thetas, 10));
             },
             MessageSpecific::AirbornePositionMessage {
                 hdr,
@@ -717,7 +729,7 @@ fn process_messages(
                 ent.message_count += 1;
 
                 // Update get average set a pipe or existing pipe.
-                //pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.theta, 10));
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.thetas, 10));
 
                 if f_flag {
                     ent.odd_cpr = Some((raw_lat, raw_lon, sample_index));
@@ -809,6 +821,28 @@ impl PipeManagement {
         }
     }
 
+    /// Sets pipe to theta using global pipe index (across all threads).
+    ///
+    /// If thetas is None this will unset the pipe and it will return to
+    /// random.
+    ///
+    /// Warning: A subsequent call to `unset_addr` with the same `addr` will
+    ///          not unset the pipe.
+    fn set_pipe_to_theta(&mut self, pipe_ndx: usize, addr: u32, thetas: Option<Vec<f32>>) {
+        let thread_ndx = pipe_ndx / self.pipe_count;
+        let pipe_ndx = pipe_ndx - thread_ndx * self.pipe_count;
+        match thetas {
+            Some(v) => {
+                self.pipe_to_addr[pipe_ndx] = Some(addr);
+                self.txs[thread_ndx].send(ThreadTxMessage::SetTheta(pipe_ndx, v)).unwrap();
+            },
+            None => {
+                self.pipe_to_addr[pipe_ndx] = None;
+                self.txs[thread_ndx].send(ThreadTxMessage::UnsetTheta(pipe_ndx)).unwrap();
+            },
+        }
+    }
+
     /// Finds an unused pipe and sets its theta and assigns it to the specified `addr` or updates an existing.
     fn set_addr_to_theta(
         &mut self,
@@ -881,6 +915,10 @@ struct Args {
     /// TCP address to output raw messages to.
     #[arg(short, long)]
     net_raw_out: Option<String>,
+
+    /// Uniform Linear Array mode. Provide the spacing in wavelength.
+    #[arg(short, long)]
+    ula_spacing_wavelength: Option<f32>,
 }
 
 fn main() {
@@ -987,6 +1025,29 @@ fn main() {
                     panic!("Error: {}", e);
                 }
             };
+
+            match args.ula_spacing_wavelength {
+                None => (),
+                Some(spacing) => {
+                    let total_pipes = thread_count * cycle_count;
+
+                    let slice = PI / (total_pipes as f32 - 1.0);
+
+                    for n in 0..total_pipes {
+                        let theta = slice * n as f32 - PI * 0.5f32;
+                        
+                        let mut thetas: Vec<f32> = Vec::with_capacity(streams - 1);
+
+                        for element_index in 1..streams {
+                            let shift = -spacing * PI * 2.0f32 * theta.sin() * element_index as f32;
+                            thetas.push(shift);
+                        }
+
+                        pipe_mgmt.set_pipe_to_theta(n as usize, 0, Some(thetas));
+                    }
+                },
+            }
+
 
             println!("working with {} streams", streams);
 
@@ -1108,7 +1169,7 @@ fn main() {
                             }
                             for (addr, ent) in entities.iter() {
                                 println!(
-                                    "{:6x} {:.1} {:.2} {:.2} {} {:.2}",
+                                    "{:6x} {:.1} {:.2} {:.2} {} {:?}",
                                     addr,
                                     ent.alt.unwrap_or(0.0),
                                     ent.lat.unwrap_or(0.0),
