@@ -600,14 +600,17 @@ struct Entity {
     last_update: u64,
     message_count: u64,
     thetas: VecDeque<Vec<f32>>,
+    snrs: VecDeque<f32>,
 }
 
 impl Entity {
     /// Push new theta, pop any over `num` size, and return the average of the remaining theta elements.
-    fn push_theta_cap_avg(&mut self, thetas: Vec<f32>, num: usize) -> Vec<f32> {
+    fn push_theta_cap_avg(&mut self, snr: f32, thetas: Vec<f32>, num: usize) -> Vec<f32> {
         self.thetas.push_front(thetas);
+        self.snrs.push_front(snr);
         while self.thetas.len() > num {
             self.thetas.pop_back();
+            self.snrs.pop_back();
         }
 
         self.theta_avg()
@@ -617,18 +620,21 @@ impl Entity {
     fn theta_avg(&self) -> Vec<f32> {
         let mut sum: Vec<f32> = Vec::with_capacity(self.thetas[0].len());
 
+        let mut total = 0.0f32;
+
         for _ in 0..self.thetas[0].len() {
             sum.push(0.0);
         }
 
-        for t in self.thetas.iter() {
+        for y in 0..self.thetas.len() {
             for x in 0..sum.len() {
-                sum[x] += t[x];
+                sum[x] += self.thetas[y][x] * self.snrs[y];
             }
+            total += self.snrs[y];
         }
         
         for x in 0..sum.len() {
-            sum[x] /= self.thetas.len() as f32;
+            sum[x] /= total;
         }
         
         sum
@@ -650,6 +656,7 @@ fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
                 last_update: 0u64,
                 aircraft_type: None,
                 thetas: VecDeque::new(),
+                snrs: VecDeque::new(),
                 message_count: 0,
             });
         },
@@ -679,7 +686,7 @@ fn process_messages(
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.message_count += 1;
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.thetas, 10));
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
             },
             MessageSpecific::AirborneVelocityMessage {
                 hdr, 
@@ -697,7 +704,7 @@ fn process_messages(
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.message_count += 1;
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.thetas, 10));
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
             },
             MessageSpecific::AircraftIdenAndCat {
                 hdr,
@@ -712,7 +719,7 @@ fn process_messages(
                 ent.message_count += 1;
 
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.thetas, 10));
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
             },
             MessageSpecific::AirbornePositionMessage {
                 hdr,
@@ -729,7 +736,7 @@ fn process_messages(
                 ent.message_count += 1;
 
                 // Update get average set a pipe or existing pipe.
-                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.thetas, 10));
+                pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
 
                 if f_flag {
                     ent.odd_cpr = Some((raw_lat, raw_lon, sample_index));
@@ -1170,9 +1177,12 @@ fn main() {
                                 }
                             }
                             
+                            println!(
+                                "ADDR    ALT      LAT        LON       COUNT   STEERING VECTOR"
+                            );
                             for (addr, ent) in entities.iter() {
                                 println!(
-                                    "{:6x} {:.1} {:.2} {:.2} {} {:?}",
+                                    "{:6x} {:>8.1} {:>10.4} {:>10.4} {:0>7} {:?}",
                                     addr,
                                     ent.alt.unwrap_or(0.0),
                                     ent.lat.unwrap_or(0.0),
