@@ -964,7 +964,7 @@ struct Args {
     #[arg(short, long)]
     net_raw_out: Option<String>,
 
-    /// Uniform Linear Array mode. Provide the spacing in wavelength.
+    /// Uniform Linear Array mode. Provide the spacing of the elements in wavelength. Use 0.5 for half a wavelength.
     #[arg(short, long)]
     ula_spacing_wavelength: Option<f32>,
 }
