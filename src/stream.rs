@@ -96,6 +96,51 @@ pub fn process_stream_mfloat32(
     results
 }
 
+/// Does a single beamforming operation. Expects 2 streams of int16 IQ pairs.
+///
+/// This is a loop unrolled version of `process_buffer_single`. This was done
+/// to optimize for performance. The looped version was taking too much CPU
+/// time.
+pub fn process_buffer_single_x2(
+    u8_buffer: &[u8],
+    thetas_b: f32,
+    amplitude_a: f32,
+    amplitude_b: f32,
+    pipe_ndx: usize
+) -> Vec<ProcessStreamResult> {
+    let buffer: &[i16] = cast_slice(u8_buffer);
+    let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / (2 * 2));
+
+    let bri = thetas_b.cos();
+    let brq = thetas_b.sin();
+
+    for x in 0..buffer.len() / 4 {
+        let chunk = &buffer[x * 4..x * 4 + 4];
+        let ai: f32 =     chunk[0] as f32 / 2049.0 * amplitude_a;
+        let aq: f32 =     chunk[1] as f32 / 2049.0 * amplitude_a;
+        let mut bi: f32 = chunk[2] as f32 / 2049.0 * amplitude_b;
+        let mut bq: f32 = chunk[3] as f32 / 2049.0 * amplitude_b;
+        
+        // Rotate the vectors by the thetas provided.
+        bi = bi * bri - bq * brq;
+        bq = bi * brq + bq * bri;
+        // Sum the vectors.
+        let ei = ai + bi;
+        let eq = aq + bq;
+        // Take the magnitude and store result.
+        mbuffer.push((ei * ei + eq * eq).sqrt());
+    }
+
+    process_stream_mfloat32(
+        &mbuffer,
+        &buffer,
+        &vec![thetas_b],
+        &vec![amplitude_a, amplitude_b],
+        2,
+        pipe_ndx
+    )
+}
+
 /// Does a single beamforming operation. Expects 4 streams of int16 IQ pairs.
 ///
 /// This is a loop unrolled version of `process_buffer_single`. This was done
@@ -182,7 +227,15 @@ pub fn process_buffer_single(
         panic!("The number of theta passed as part of Vec<f32> should be minus 1 the number of streams.")
     }
 
-    if streams == 4 {
+    if streams == 2 {
+        return process_buffer_single_x2(
+            u8_buffer,
+            thetas[0],
+            amplitudes[0],
+            amplitudes[1],
+            pipe_ndx
+        );
+    } else if streams == 4 {
         return process_buffer_single_x4(
             u8_buffer,
             thetas[0],
