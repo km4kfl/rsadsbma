@@ -75,7 +75,7 @@ def main(args):
         target = reader_thread, args=(dev_slave, qs), daemon=True
     )
 
-    print('...about to fire the trigger')
+    print('...about to fire the trigger (connect client now!)')
     time.sleep(1)
 
     tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
