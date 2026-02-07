@@ -15,6 +15,7 @@ pub struct ProcessStreamResult {
     pub ndx: usize,
     pub thetas: Vec<f32>,
     pub amplitudes: Vec<f32>,
+    pub pipe_ndx: usize,
 }
 
 /// Demodulates a message using `stream`.
@@ -31,7 +32,8 @@ pub fn process_stream_mfloat32(
     i16stream: &[i16],
     thetas: &[f32],
     amplitudes: &[f32],
-    streams: usize
+    streams: usize,
+    pipe_ndx: usize
 ) -> Vec<ProcessStreamResult> {
     let mut results: Vec<ProcessStreamResult> = Vec::new();
 
@@ -87,6 +89,7 @@ pub fn process_stream_mfloat32(
             ndx: x,
             thetas: thetas.to_vec(),
             amplitudes: amplitudes.to_vec(),
+            pipe_ndx: pipe_ndx,
         });
     }
 
@@ -107,6 +110,7 @@ pub fn process_buffer_single_x4(
     amplitude_b: f32,
     amplitude_c: f32,
     amplitude_d: f32,
+    pipe_ndx: usize
 ) -> Vec<ProcessStreamResult> {
     let buffer: &[i16] = cast_slice(u8_buffer);
     let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / (4 * 2));
@@ -148,7 +152,8 @@ pub fn process_buffer_single_x4(
         &buffer,
         &vec![thetas_b, thetas_c, thetas_d],
         &vec![amplitude_a, amplitude_b, amplitude_c, amplitude_d],
-        4
+        4,
+        pipe_ndx
     )
 }
 
@@ -166,7 +171,8 @@ pub fn process_buffer_single(
     u8_buffer: &[u8],
     thetas: &[f32],
     amplitudes: &[f32],
-    streams: usize
+    streams: usize,
+    pipe_ndx: usize
 ) -> Vec<ProcessStreamResult> {    
     if amplitudes.len() != streams {
         panic!("The number of amplitudes passed as part of Vec<f32> should be equal to the number of streams.")
@@ -186,6 +192,7 @@ pub fn process_buffer_single(
             amplitudes[1],
             amplitudes[2],
             amplitudes[3],
+            pipe_ndx
         );
     }
 
@@ -222,7 +229,7 @@ pub fn process_buffer_single(
         mbuffer.push((ai * ai + aq * aq).sqrt());
     }
 
-    process_stream_mfloat32(&mbuffer, &buffer, thetas, amplitudes, streams)
+    process_stream_mfloat32(&mbuffer, &buffer, thetas, amplitudes, streams, pipe_ndx)
 }
 
 /// Process buffer using many iterations and translate results into messages.
@@ -236,7 +243,8 @@ pub fn process_buffer(
     bit_error_table: &HashMap<u32, u16>,
     pipe_theta: &Vec<Option<Vec<f32>>>,
     streams: usize,
-    seen: &Arc<Mutex<HashMap<u32, Instant>>>
+    seen: &Arc<Mutex<HashMap<u32, Instant>>>,
+    base_pipe_ndx: usize
 ) -> Vec<Message> {
     let buffer: &[i16] = cast_slice(u8_buffer);
     let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / 4);
@@ -283,7 +291,7 @@ pub fn process_buffer(
             },
         };
 
-        let results = process_buffer_single(u8_buffer, &thetas, &amplitudes, streams);
+        let results = process_buffer_single(u8_buffer, &thetas, &amplitudes, streams, base_pipe_ndx + pipe_ndx);
 
         for result in results {
             match hm.get(&result.ndx) {

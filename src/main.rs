@@ -54,6 +54,8 @@ struct MessageCommon {
     amplitudes: Vec<f32>,
     /// Was the CRC OK?
     crc_ok: bool,
+    /// The global pipe index.
+    pipe_ndx: usize,
 }
 
 impl fmt::Debug for MessageCommon {
@@ -284,6 +286,7 @@ fn process_result(
         samples: result.samples,
         amplitudes: result.amplitudes,
         crc_ok: crc_ok,
+        pipe_ndx: result.pipe_ndx,
     };
 
     match msgtype {
@@ -590,6 +593,7 @@ fn decode_cpr(even: (u32, u32, u64), odd: (u32, u32, u64)) -> Option<(f32, f32)>
 
 /// Anything with a transponder such as an aircraft.
 struct Entity {
+    addr: u32,
     odd_cpr: Option<(u32, u32, u64)>,
     even_cpr: Option<(u32, u32, u64)>,
     lat: Option<f32>,
@@ -601,6 +605,11 @@ struct Entity {
     message_count: u64,
     thetas: VecDeque<Vec<f32>>,
     snrs: VecDeque<f32>,
+    /// The number of messages that matched the set steering vector. 
+    ///
+    /// This shows how effective the steering vector calculated is at
+    /// capturing messages.
+    inbeam: u64,
 }
 
 impl Entity {
@@ -639,6 +648,17 @@ impl Entity {
         
         sum
     }
+
+    fn check_if_in_beam(&mut self, pipe_mgmt: &mut PipeManagement, pipe_ndx: usize) {
+        match pipe_mgmt.get_addr_pipe_ndx(self.addr) {
+            Some(stored_pipe_ndx) => {
+                if stored_pipe_ndx == pipe_ndx {
+                    self.inbeam += 1;
+                }
+            },
+            None => (),
+        }
+    }
 }
 
 /// Initialize a new entity/aircraft is none is found.
@@ -647,6 +667,7 @@ fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
         Some(_) => (),
         None => {
             entities.insert(addr, Entity {
+                addr: addr,
                 odd_cpr: None,
                 even_cpr: None,
                 lat: None,
@@ -658,6 +679,7 @@ fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
                 thetas: VecDeque::new(),
                 snrs: VecDeque::new(),
                 message_count: 0,
+                inbeam: 0,
             });
         },
     }
@@ -685,6 +707,9 @@ fn process_messages(
                 init_entity_if_not(hdr.addr, entities);
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.message_count += 1;
+
+                ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
+
                 // Update get average set a pipe or existing pipe.
                 pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
             },
@@ -703,6 +728,9 @@ fn process_messages(
                 init_entity_if_not(hdr.addr, entities);
                 let ent = entities.get_mut(&hdr.addr).unwrap();
                 ent.message_count += 1;
+
+                ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
+                
                 // Update get average set a pipe or existing pipe.
                 pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
             },
@@ -717,6 +745,8 @@ fn process_messages(
                 ent.flight = Some(flight);
                 ent.aircraft_type = Some(aircraft_type);
                 ent.message_count += 1;
+
+                ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
                 // Update get average set a pipe or existing pipe.
                 pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
@@ -734,6 +764,8 @@ fn process_messages(
                 ent.last_update = sample_index;
                 ent.alt = Some(altitude);
                 ent.message_count += 1;
+
+                ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
                 // Update get average set a pipe or existing pipe.
                 pipe_mgmt.set_addr_to_theta(hdr.addr, ent.push_theta_cap_avg(m.common.snr, m.common.thetas, 10));
@@ -850,6 +882,15 @@ impl PipeManagement {
         }
     }
 
+    fn get_addr_pipe_ndx(&self, addr: u32) -> Option<usize> {
+        match self.addr_to_pipe.get(&addr) {
+            None => None,
+            Some((thread_ndx, pipe_ndx)) => {
+                Some(thread_ndx * self.pipe_count + pipe_ndx)
+            },
+        }
+    }
+
     /// Finds an unused pipe and sets its theta and assigns it to the specified `addr` or updates an existing.
     fn set_addr_to_theta(
         &mut self,
@@ -945,13 +986,15 @@ fn main() {
     let mut rxs: Vec<Receiver<Vec<Message>>> = Vec::new();
     let seen: Arc<Mutex<HashMap<u32, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    for _ in 0..thread_count {
+    for x in 0..thread_count as usize {
         let (atx, brx) = channel();
         let (btx, arx) = channel();
         pipe_mgmt.push_tx(atx);
         rxs.push(arx);
 
         let seen_thread = seen.clone();
+
+        let base_pipe_ndx: usize = x * cycle_count as usize;
 
         thread::spawn(move || {
             println!("spawned");
@@ -966,7 +1009,8 @@ fn main() {
                             &bit_error_table,
                             &pipe_theta,
                             streams,
-                            &seen_thread
+                            &seen_thread,
+                            base_pipe_ndx
                         )).unwrap();
                     },
                     ThreadTxMessage::SetTheta(pipe_ndx, thetas) => {
@@ -1178,16 +1222,18 @@ fn main() {
                             }
                             
                             println!(
-                                "ADDR    ALT      LAT        LON       COUNT   STEERING VECTOR"
+                                "ADDR    ALT      LAT        LON       COUNT   INBEAM  STEERING VECTOR"
                             );
                             for (addr, ent) in entities.iter() {
                                 println!(
-                                    "{:6x} {:>8.1} {:>10.4} {:>10.4} {:0>7} {:?}",
+                                    "{:6x} {:>8.1} {:>10.4} {:>10.4} {:0>7} {:>7} {:?}",
                                     addr,
                                     ent.alt.unwrap_or(0.0),
                                     ent.lat.unwrap_or(0.0),
                                     ent.lon.unwrap_or(0.0),
                                     ent.message_count,
+                                    // How many messages were picked from the calculated steering vector.
+                                    ent.inbeam,
                                     ent.theta_avg()
                                 );
                             }
