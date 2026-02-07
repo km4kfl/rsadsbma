@@ -295,6 +295,7 @@ pub fn process_buffer(
     u8_buffer: &[u8],
     bit_error_table: &HashMap<u32, u16>,
     pipe_theta: &Vec<Option<Vec<f32>>>,
+    pipe_amps: &Vec<Option<Vec<f32>>>,
     streams: usize,
     seen: &Arc<Mutex<HashMap<u32, Instant>>>,
     base_pipe_ndx: usize
@@ -338,9 +339,23 @@ pub fn process_buffer(
                     thetas[i] = thetas_other[i];
                 }
 
-                for i in 0..streams {
-                    amplitudes[i] = 1.0;
-                }                
+                match &pipe_amps[pipe_ndx] {
+                    None => {
+                        for i in 0..streams {
+                            amplitudes[i] = 1.0;
+                        }                        
+                    },
+                    Some(amps) => {
+                        if amps.len() != streams {
+                            println!("amps.len(): {} {}", amps.len(), streams);
+                            panic!("The provided amplitude array must match the number of streams.");
+                        }
+
+                        for i in 0..streams {
+                            amplitudes[i] = amps[i];
+                        }
+                    },
+                }           
             },
         };
 

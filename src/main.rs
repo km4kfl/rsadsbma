@@ -484,7 +484,7 @@ struct Entity {
 
 impl Entity {
     /// Push new theta, pop any over `num` size, and return the average of the remaining theta elements.
-    fn push_theta_cap_avg(&mut self, snr: f32, thetas: Vec<f32>, num: usize, snr_scaler: f32) -> Vec<f32> {
+    fn push_theta_cap_avg(&mut self, snr: f32, thetas: Vec<f32>, num: usize, snr_scaler: f32) -> (Vec<f32>, Vec<f32>) {
         self.thetas.push_front(thetas);
         self.snrs.push_front(snr);
         while self.thetas.len() > num {
@@ -498,7 +498,7 @@ impl Entity {
     /// Return the weighted average of the elements of the `thetas` array.
     ///
     /// The SNR weights the average.
-    fn theta_avg(&self, snr_scaler: f32) -> Vec<f32> {
+    fn theta_avg(&self, snr_scaler: f32) -> (Vec<f32>, Vec<f32>) {
         let mut sum: Vec<f32> = Vec::with_capacity(self.thetas[0].len());
 
         let mut total = 0.0f32;
@@ -518,7 +518,8 @@ impl Entity {
             sum[x] /= total;
         }
         
-        sum
+        let sum_len = sum.len() + 1;
+        (sum, vec![1.0; sum_len])
     }
 
     /// Check if the pipe_ndx, likely from a message, is currently the target for the address.
@@ -593,10 +594,12 @@ fn process_messages(
 
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
+                let (thetas, amps) = ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler);
                 // Update get average set a pipe or existing pipe.
                 pipe_mgmt.set_addr_to_theta(
                     hdr.addr,
-                    ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler)
+                    thetas,
+                    Some(amps)
                 );
             },
             MessageSpecific::AirborneVelocityMessage {
@@ -618,9 +621,11 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
                 
                 // Update get average set a pipe or existing pipe.
+                let (thetas, amps) = ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler);
                 pipe_mgmt.set_addr_to_theta(
                     hdr.addr,
-                    ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler)
+                    thetas,
+                    Some(amps)
                 );
             },
             MessageSpecific::AircraftIdenAndCat {
@@ -638,9 +643,11 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
                 // Update get average set a pipe or existing pipe.
+                let (thetas, amps) = ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler);
                 pipe_mgmt.set_addr_to_theta(
                     hdr.addr,
-                    ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler)
+                    thetas,
+                    Some(amps)
                 );
             },
             MessageSpecific::AirbornePositionMessage {
@@ -660,9 +667,11 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
                 // Update get average set a pipe or existing pipe.
+                let (thetas, amps) = ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler);
                 pipe_mgmt.set_addr_to_theta(
                     hdr.addr,
-                    ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler)
+                    thetas,
+                    Some(amps)
                 );
 
                 if f_flag {
@@ -768,6 +777,7 @@ fn main() {
             println!("spawned");
             let bit_error_table = crc::modes_init_error_info();
             let mut pipe_theta: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
+            let mut pipe_amps: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
 
             loop {
                 match brx.recv().unwrap() {
@@ -776,16 +786,20 @@ fn main() {
                             &buffer,
                             &bit_error_table,
                             &pipe_theta,
+                            &pipe_amps,
                             streams,
                             &seen_thread,
                             base_pipe_ndx
                         )).unwrap();
                     },
-                    ThreadTxMessage::SetWeights(pipe_ndx, thetas) => {
+                    ThreadTxMessage::SetWeights(pipe_ndx, thetas, amps) => {
                         pipe_theta[pipe_ndx] = Some(thetas);
+                        pipe_amps[pipe_ndx] = amps;
+                        
                     },
                     ThreadTxMessage::UnsetWeights(pipe_ndx) => {
                         pipe_theta[pipe_ndx] = None;
+                        pipe_amps[pipe_ndx] = None;
                     },
                 }
             }
@@ -866,7 +880,7 @@ fn main() {
                             thetas.push(shift);
                         }
 
-                        pipe_mgmt.set_pipe_to_theta(n as usize, 0, Some(thetas));
+                        pipe_mgmt.set_pipe_to_theta(n as usize, 0, Some(thetas), None);
                     }
                 },
             }

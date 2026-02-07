@@ -63,13 +63,13 @@ impl PipeManagement {
     ///
     /// Warning: A subsequent call to `unset_addr` with the same `addr` will
     ///          not unset the pipe.
-    pub fn set_pipe_to_theta(&mut self, pipe_ndx: usize, addr: u32, thetas: Option<Vec<f32>>) {
+    pub fn set_pipe_to_theta(&mut self, pipe_ndx: usize, addr: u32, thetas: Option<Vec<f32>>, amps: Option<Vec<f32>>) {
         let thread_ndx = pipe_ndx / self.pipe_count;
         let local_pipe_ndx = pipe_ndx - thread_ndx * self.pipe_count;
         match thetas {
             Some(v) => {
                 self.pipe_to_addr[pipe_ndx] = Some(addr);
-                self.txs[thread_ndx].send(ThreadTxMessage::SetWeights(local_pipe_ndx, v)).unwrap();
+                self.txs[thread_ndx].send(ThreadTxMessage::SetWeights(local_pipe_ndx, v, amps)).unwrap();
             },
             None => {
                 self.pipe_to_addr[pipe_ndx] = None;
@@ -92,10 +92,11 @@ impl PipeManagement {
         &mut self,
         addr: u32,
         thetas: Vec<f32>,
+        amps: Option<Vec<f32>>
     ) -> bool {
         match self.addr_to_pipe.get(&addr) {
             Some((thread_ndx, pipe_ndx)) => {
-                self.txs[*thread_ndx].send(ThreadTxMessage::SetWeights(*pipe_ndx, thetas)).unwrap();
+                self.txs[*thread_ndx].send(ThreadTxMessage::SetWeights(*pipe_ndx, thetas, amps)).unwrap();
                 true
             },
             None => {
@@ -105,7 +106,7 @@ impl PipeManagement {
                         let thread_ndx = x / self.pipe_count;
                         let pipe_ndx = x - thread_ndx * self.pipe_count;
                         self.addr_to_pipe.insert(addr, (thread_ndx, pipe_ndx));
-                        self.txs[thread_ndx].send(ThreadTxMessage::SetWeights(pipe_ndx, thetas)).unwrap();
+                        self.txs[thread_ndx].send(ThreadTxMessage::SetWeights(pipe_ndx, thetas, amps)).unwrap();
                         return true;
                     }
                 }
@@ -135,7 +136,7 @@ pub enum ThreadTxMessage {
     /// of streams contained in the buffer.
     Buffer(Vec<u8>, usize),
     /// Used to set a theta to a constant value for a single pipe.
-    SetWeights(usize, Vec<f32>),
+    SetWeights(usize, Vec<f32>, Option<Vec<f32>>),
     /// Used to revert a pipe back to a value that is randomly choosen per buffer process operation.
     UnsetWeights(usize),
 }
