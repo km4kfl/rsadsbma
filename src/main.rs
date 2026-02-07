@@ -728,12 +728,12 @@ struct Args {
 
     /// Scales the SNR's weight in the weighted average.
     #[arg(short, long)]
-    #[clap(default_value_t = 1.0)]
+    #[clap(default_value_t = 40.0)]
     snr_scaler: f32,
 
     /// The depth or count of the items used in the rolling average calculation for the tracking steering vector.
     #[arg(short, long)]
-    #[clap(default_value_t = 10)]
+    #[clap(default_value_t = 3)]
     weighted_avg_depth: usize
 }
 
