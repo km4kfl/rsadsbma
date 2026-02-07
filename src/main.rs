@@ -796,13 +796,13 @@ fn main() {
         Ok(mut stream) => {
             println!("connected");
             // We are expecting TWO interleaved streams from TWO antennas.
-            let mut buffer: Vec<u8> = vec![0; MODES_LONG_MSG_SAMPLES * 1024 * 16];
             let mut read: usize = 0;
-
+            
+            let mut short_buffer = vec![0; 1];
             // Read the number of streams.
-            let streams = match stream.read(&mut buffer[0..1]) {
+            let streams = match stream.read(&mut short_buffer[0..1]) {
                 Ok(bytes_read) if bytes_read > 0 => {
-                    buffer[0] as usize
+                    short_buffer[0] as usize
                 },
                 Ok(_) => {
                     panic!("Sample stream TCP connection returned zero bytes.");
@@ -811,6 +811,8 @@ fn main() {
                     panic!("Error: {}", e);
                 }
             };
+
+            let mut buffer: Vec<u8> = vec![0; MODES_LONG_MSG_SAMPLES * 1024 * (streams * 4)];
 
             match args.ula_spacing_wavelength {
                 None => (),
