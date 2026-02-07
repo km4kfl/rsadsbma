@@ -617,7 +617,7 @@ impl Entity {
     fn theta_avg(&self) -> Vec<f32> {
         let mut sum: Vec<f32> = Vec::with_capacity(self.thetas[0].len());
 
-        for x in 0..self.thetas[0].len() {
+        for _ in 0..self.thetas[0].len() {
             sum.push(0.0);
         }
 
@@ -984,6 +984,8 @@ fn main() {
 
     let mut sample_index: u64 = 0;
 
+    let mut buffer_time_elapsed_avg = 0.0f64;
+
     let mut stat_aiac: u64 = 0;
     let mut stat_spm: u64 = 0;
     let mut stat_apm: u64 = 0;
@@ -1167,6 +1169,7 @@ fn main() {
                                     println!("removed addr {:6x}", addr);
                                 }
                             }
+                            
                             for (addr, ent) in entities.iter() {
                                 println!(
                                     "{:6x} {:.1} {:.2} {:.2} {} {:?}",
@@ -1177,16 +1180,23 @@ fn main() {
                                     ent.message_count,
                                     ent.theta_avg()
                                 );
-                            }                                                    
+                            }
+
+                            println!("buffer-time-elapsed-average: {} buffer-time:{}", buffer_time_elapsed_avg, buffer_time);
                         }
                         
                         {
                             let elapsed_dur: Duration = start.elapsed();
-                            let elapsed = elapsed_dur.as_secs() as f64 + elapsed_dur.subsec_micros() as f64 / 1e6f64; 
-                            if elapsed > buffer_time * 0.95 {
-                                println!("elapsed:{} buffer_time:{} TOO SLOW!!! REDUCE CYCLES!!!", elapsed, buffer_time);
+                            let cur_elapsed = elapsed_dur.as_secs() as f64 + elapsed_dur.subsec_micros() as f64 / 1e6f64;
+                            
+                            if buffer_time_elapsed_avg == 0.0 {
+                                buffer_time_elapsed_avg = cur_elapsed;
                             } else {
-                                println!("elapsed:{} buffer_time:{}", elapsed, buffer_time);
+                                buffer_time_elapsed_avg = buffer_time_elapsed_avg * 0.9999 + cur_elapsed * 0.0001;
+                            }
+                            
+                            if cur_elapsed > buffer_time * 0.95 {
+                                println!("elapsed:{} buffer_time:{} TOO SLOW!!! REDUCE CYCLES!!!", cur_elapsed, buffer_time);
                             }
                         }
 
