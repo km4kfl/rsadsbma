@@ -91,3 +91,14 @@ If you are looking for the `CLKIN` (clock in) and `CLKOUT` (clock out). Hold the
 https://www.nuand.com/libbladeRF-doc/v2.5.0/group___f_n___t_r_i_g.html
 
 https://www.nuand.com/libbladeRF-doc/v2.5.0/group___f_n___b_l_a_d_e_r_f2___l_o_w___l_e_v_e_l___c_l_o_c_k___b_u_f_f_e_r___o_u_t_p_u_t.html
+
+# ULA Mode
+
+It supports a uniform linear array (ULA) mode with the command line option `--ula-spacing-wavelength`. This activates the mode
+when used and it treats the antennas if they are an array with the same spacing between each element. The argument to this
+command line option is the wavelength of the spacing. For example, if you antennas are spaced at half a wavelength then the
+value would be `0.5`. You will have to calculate the wavelength by hand into meters with `300e6 / 1090e6` then if you wanted
+a half wavelength spacing you could do `300e6 / 1090e6 * 0.5` which would give you the distance the elements need to be spaced
+at half a wavelength in meters. The `0.5` is the wavelength spacing argument for `--ula-spacing-wavelength`.
+
+This mode is in contrast to the default random mode where the antenna weights are randomly selected.
