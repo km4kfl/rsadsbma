@@ -464,17 +464,39 @@ fn write_message_to_file(file: &mut File, m: &Message) {
 /// Anything with a transponder such as an aircraft.
 struct Entity {
     addr: u32,
+    /// The odd raw lat and lon from a message.
+    ///
+    /// The `odd_cpr` and `even_cpr` are used to compute a
+    /// latitude and longitude.
     odd_cpr: Option<(u32, u32, u64)>,
+    /// The even raw lat and lon from a message.
+    ///
+    /// The `odd_cpr` and `even_cpr` are used to compute a
+    /// latitude and longitude.
     even_cpr: Option<(u32, u32, u64)>,
+    /// The last known computed latitude from the CPR format.
     lat: Option<f32>,
+    /// The last known computed longitude from the CPR format.
     lon: Option<f32>,
+    /// The last known altitude.
     alt: Option<f32>,
+    /// The last known flight identifier transmitted.
     flight: Option<Vec<char>>,
+    /// The last known aircraft type.
     aircraft_type: Option<u8>,
+    /// The last update. Uses sample stream time relative to the beginning of the stream.
+    ///
+    /// This is an actual count of samples since the program started where the message was
+    /// found. The convert it to seconds you need the sampling rate.
     last_update: u64,
+    /// Total messages to this `addr`.
     message_count: u64,
+    /// A list used to compute a rolling weighted average over the weight thetas.
     thetas: VecDeque<Vec<f32>>,
+    /// A list used to compute a rolling weighted average.
     snrs: VecDeque<f32>,
+    /// A list used to compute a rolling weighted average over the weight amplitudes.
+    amps: VecDeque<Vec<f32>>,
     /// The number of messages that matched the set steering vector. 
     ///
     /// This shows how effective the steering vector calculated is at
@@ -484,12 +506,15 @@ struct Entity {
 
 impl Entity {
     /// Push new theta, pop any over `num` size, and return the average of the remaining theta elements.
-    fn push_theta_cap_avg(&mut self, snr: f32, thetas: Vec<f32>, num: usize, snr_scaler: f32) -> (Vec<f32>, Vec<f32>) {
+    fn push_theta_cap_avg(&mut self, snr: f32, thetas: Vec<f32>, amps: Vec<f32>, num: usize, snr_scaler: f32) -> (Vec<f32>, Vec<f32>) {
         self.thetas.push_front(thetas);
         self.snrs.push_front(snr);
+        self.amps.push_front(amps);
+
         while self.thetas.len() > num {
             self.thetas.pop_back();
             self.snrs.pop_back();
+            self.amps.pop_back();
         }
 
         self.theta_avg(snr_scaler)
@@ -500,26 +525,42 @@ impl Entity {
     /// The SNR weights the average.
     fn theta_avg(&self, snr_scaler: f32) -> (Vec<f32>, Vec<f32>) {
         let mut sum: Vec<f32> = Vec::with_capacity(self.thetas[0].len());
+        let mut amp_sum: Vec<f32> = Vec::with_capacity(self.amps[0].len());
 
         let mut total = 0.0f32;
+        let mut amp_total = 0.0f32;
 
         for _ in 0..self.thetas[0].len() {
             sum.push(0.0);
+        }
+
+        for _ in 0..self.amps[0].len() {
+            amp_sum.push(0.0);
         }
 
         for y in 0..self.thetas.len() {
             for x in 0..sum.len() {
                 sum[x] += self.thetas[y][x] * self.snrs[y] * snr_scaler;
             }
+
             total += self.snrs[y] * snr_scaler;
+        }
+
+        for y in 0..self.amps.len() {
+            for x in 0..amp_sum.len() {
+                amp_sum[x] += self.amps[y][x] * self.snrs[y] * snr_scaler;
+            }
         }
         
         for x in 0..sum.len() {
             sum[x] /= total;
         }
+
+        for x in 0..amp_sum.len() {
+            amp_sum[x] /= total;
+        }
         
-        let sum_len = sum.len() + 1;
-        (sum, vec![1.0; sum_len])
+        (sum, amp_sum)
     }
 
     /// Check if the pipe_ndx, likely from a message, is currently the target for the address.
@@ -560,6 +601,7 @@ fn init_entity_if_not(addr: u32, entities: &mut HashMap<u32, Entity>) {
                 aircraft_type: None,
                 thetas: VecDeque::new(),
                 snrs: VecDeque::new(),
+                amps: VecDeque::new(),
                 message_count: 0,
                 inbeam: 0,
             });
@@ -594,7 +636,9 @@ fn process_messages(
 
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
-                let (thetas, amps) = ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler);
+                let (thetas, amps) = ent.push_theta_cap_avg(
+                    m.common.snr, m.common.thetas, m.common.amplitudes, weighted_avg_depth, snr_scaler
+                );
                 // Update get average set a pipe or existing pipe.
                 pipe_mgmt.set_addr_to_theta(
                     hdr.addr,
@@ -621,7 +665,9 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
                 
                 // Update get average set a pipe or existing pipe.
-                let (thetas, amps) = ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler);
+                let (thetas, amps) = ent.push_theta_cap_avg(
+                    m.common.snr, m.common.thetas, m.common.amplitudes, weighted_avg_depth, snr_scaler
+                );
                 pipe_mgmt.set_addr_to_theta(
                     hdr.addr,
                     thetas,
@@ -643,7 +689,9 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
                 // Update get average set a pipe or existing pipe.
-                let (thetas, amps) = ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler);
+                let (thetas, amps) = ent.push_theta_cap_avg(
+                    m.common.snr, m.common.thetas, m.common.amplitudes, weighted_avg_depth, snr_scaler
+                );
                 pipe_mgmt.set_addr_to_theta(
                     hdr.addr,
                     thetas,
@@ -667,7 +715,9 @@ fn process_messages(
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
 
                 // Update get average set a pipe or existing pipe.
-                let (thetas, amps) = ent.push_theta_cap_avg(m.common.snr, m.common.thetas, weighted_avg_depth, snr_scaler);
+                let (thetas, amps) = ent.push_theta_cap_avg(
+                    m.common.snr, m.common.thetas, m.common.amplitudes, weighted_avg_depth, snr_scaler
+                );
                 pipe_mgmt.set_addr_to_theta(
                     hdr.addr,
                     thetas,
@@ -743,7 +793,12 @@ struct Args {
     /// The depth or count of the items used in the rolling average calculation for the tracking steering vector.
     #[arg(short, long)]
     #[clap(default_value_t = 3)]
-    weighted_avg_depth: usize
+    weighted_avg_depth: usize,
+
+    /// If set this will cause the amplitudes to be randomized helping to change the beam pattern.
+    #[arg(short, long)]
+    #[clap(default_value_t = true)]
+    randomize_amplitudes: bool,
 }
 
 fn main() {
@@ -789,7 +844,8 @@ fn main() {
                             &pipe_amps,
                             streams,
                             &seen_thread,
-                            base_pipe_ndx
+                            base_pipe_ndx,
+                            args.randomize_amplitudes
                         )).unwrap();
                     },
                     ThreadTxMessage::SetWeights(pipe_ndx, thetas, amps) => {
@@ -1024,7 +1080,7 @@ fn main() {
                             }
                             
                             println!(
-                                "ADDR   FLIGHT    ALT      LAT        LON       COUNT    INBEAM  STEERING VECTOR"
+                                "ADDR   FLIGHT    ALT        LAT       LON      COUNT    INBEAM  STEERING VECTOR"
                             );
 
                             for (addr, ent) in entities.iter() {

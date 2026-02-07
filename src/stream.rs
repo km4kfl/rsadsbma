@@ -298,7 +298,8 @@ pub fn process_buffer(
     pipe_amps: &Vec<Option<Vec<f32>>>,
     streams: usize,
     seen: &Arc<Mutex<HashMap<u32, Instant>>>,
-    base_pipe_ndx: usize
+    base_pipe_ndx: usize,
+    randomize_amplitudes: bool
 ) -> Vec<Message> {
     let buffer: &[i16] = cast_slice(u8_buffer);
     let mut mbuffer: Vec<f32> = Vec::with_capacity(buffer.len() / 4);
@@ -327,12 +328,16 @@ pub fn process_buffer(
                 }
 
                 for i in 0..streams {
-                    amplitudes[i] = 1.0; //rng.r#gen::<f32>();
+                    amplitudes[i] = if randomize_amplitudes {
+                        rng.r#gen::<f32>()
+                    } else {
+                        1.0
+                    };
                 }
             },
             Some(thetas_other) => {
                 if thetas_other.len() != streams - 1 {
-                    panic!("Expected the count of thetas to be minus one the streams.")
+                    panic!("Expected the count of thetas to be minus one the stream count.")
                 }
 
                 for i in 0..streams - 1 {
@@ -342,6 +347,9 @@ pub fn process_buffer(
                 match &pipe_amps[pipe_ndx] {
                     None => {
                         for i in 0..streams {
+                            // If the calling code provided a theta but provided no amplitude 
+                            // values then we assume they wanted a uniform amplitude. Otherwise, 
+                            // they should have specified the amplitudes and not used None.
                             amplitudes[i] = 1.0;
                         }                        
                     },
