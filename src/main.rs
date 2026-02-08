@@ -38,7 +38,6 @@ use decode::process_result;
 
 use constants::*;
 
-
 /// Serialize the common elements of a message to a file.
 fn write_message_to_file(file: &mut File, m: &Message) {
     /*
@@ -161,6 +160,8 @@ fn main() {
             loop {
                 match brx.recv().unwrap() {
                     ThreadTxMessage::Buffer(buffer, streams) => {
+                        // This calls into the `stream` module. See that
+                        // module to follow the code.
                         btx.send(stream::process_buffer(
                             &buffer,
                             &bit_error_table,
