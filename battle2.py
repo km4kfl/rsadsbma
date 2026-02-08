@@ -180,6 +180,7 @@ def main():
     got_c = 0
     got_d = 0
     got_e = 0
+    got_f = 0
     bit_error_table = modes_init_error_info()
     
     #
@@ -264,6 +265,7 @@ def main():
                     m[ndx] = snr
                     got_c += 1
 
+            # The spacing is in wavelengths.
             spacing = 0.4
             # -spacing * PI * 2.0f32 * theta.sin() * element_index as f32;
             m = {}
@@ -278,7 +280,54 @@ def main():
                         m[ndx] = snr
                         got_d += 1
 
-            print('4x-random', got_a, '4x-random-amp', got_e, '4x-ula-sweep', got_d, '2x', got_b, '1x', got_c, 'read', read / 16.0 / 2e6)
+            r = np.array([a, b, c, d])
+
+            soi_bits = [1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0]
+            soi = []
+            for b in soi_bits:
+                soi.append(np.exp(1j) * b)
+            soi = np.array(soi)
+
+            for x in range(r.shape[1] - (MODES_PREAMBLE_SAMPLES + MODES_LONG_MSG_SAMPLES)):
+                w_lms = np.zeros((4, 1), dtype=np.complex128)
+
+                mu = 0.5e-5
+
+                out = []
+
+                for i in range(MODES_PREAMBLE_SAMPLES):
+                    r_sample = r[:, x + i].reshape(-1, 1)
+                    soi_sample = soi[i % len(soi)]
+                    y = w_lms.conj().T @ r_sample
+                    out.append(np.abs(soi_sample))
+                    y = y.squeeze()
+                    error = soi_sample - y
+                    w_lms += mu * np.conj(error) * r_sample
+                
+                for i in range(MODES_LONG_MSG_SAMPLES):
+                    r_sample = r[:, x + MODES_PREAMBLE_SAMPLES + i]
+                    y = w_lms.conj().T @ r_sample
+                    out.append(np.abs(y[0]))
+
+                out = np.array(out)
+
+                res = demod(out)
+                if res is not None:
+                    snr, msg = res
+                    
+                    is_long = ((msg[0] >> 3) & 0x10) == 0x10
+
+                    if not is_long:
+                        msg = msg[0:MODES_SHORT_MSG_BYTES]
+
+                    if modes_checksum(msg) != 0:
+                        cnt = fix_bit_errors(msg, bit_error_table)
+                        if cnt > 0:
+                            got_f += 1
+                    else:
+                        got_f += 1                        
+
+            print('LMS', got_f, '4x-random', got_a, '4x-random-amp', got_e, '4x-ula-sweep', got_d, '2x', got_b, '1x', got_c, 'read', read / 16.0 / 2e6)
 
 if __name__ == '__main__':
     main()
