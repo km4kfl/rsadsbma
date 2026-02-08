@@ -1,3 +1,10 @@
+//! Processes messages to maintain the entity hashmap.
+//!
+//! The entity hashmap allows one to access a specific aircraft/transponder
+//! information struct which contains not only the latest information on an
+//! aircraft/transponder but also a computed latitude and longitude.
+//!
+//! This handles messages after they have been demodulated and decoded.
 use crate::MessageSpecific;
 use crate::cpr::decode_cpr;
 use crate::PipeManagement;
