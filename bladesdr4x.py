@@ -14,8 +14,6 @@ from bladeandnumpy import BladeRFAndNumpy
 def main(args):
     sps = 2000000
 
-    # 9da, e85
-
     print('opening master')
     dev_master = BladeRFAndNumpy(f'libusb:serial={args.serial_master}')
     print('opening slave')
@@ -78,11 +76,15 @@ def main(args):
     print('...about to fire the trigger (connect client now!)')
     time.sleep(1)
 
-    tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_socket.bind(('localhost', 7878))
-    tcp_socket.listen(1)
-
-    connection, client = tcp_socket.accept()
+    if args.file_output is None:
+        tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        tcp_socket.bind(('localhost', 7878))
+        tcp_socket.listen(1)
+        connection, client = tcp_socket.accept()
+    else:
+        connection = None
+        client = None
+        fd = open(args.file_output, 'ab')
 
     master_thread.start()
     slave_thread.start()    
@@ -91,7 +93,8 @@ def main(args):
     print('trigger fired')    
 
     # Send the number of streams as a byte.
-    connection.sendall(bytes([4]))
+    if connection is not None:
+        connection.sendall(bytes([4]))
 
     while True:
         st = time.time()
@@ -125,12 +128,18 @@ def main(args):
 
         et = time.time() - st
         print(et * sps, buffer_samps)
-        connection.sendall(chunk2.tobytes())
+
+        if connection is not None:
+            connection.sendall(chunk2.tobytes())
+        else:
+            fd.write(chunk2.tobytes())
+            
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(
-        description='Listens on 1090MHZ. Writes samples to connected client.'
+        description='Listens on 1090MHZ. Writes samples to connected client or a file.'
     )
     ap.add_argument('--serial-master', type=str, required=True, help='The first few unambigious letters of the serial for the card to use.')
     ap.add_argument('--serial-slave', type=str, required=True, help='The first few unambigious letters of the serial for the card to use.')
+    ap.add_argument('--file-output', type=str, default=None, help='A path to write the samples to a file.')
     main(ap.parse_args())
