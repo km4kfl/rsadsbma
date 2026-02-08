@@ -1,3 +1,11 @@
+'''
+This is a battle against a 4 element array, 2 element array, and a single element. 
+
+The question is who gets the most messages?
+
+There is also a battle between random probing, random probing with random amplitude,
+and if you're data had the elements with uniform spacing a ULA sweep.
+'''
 import numpy as np
 
 MODES_PREAMBLE_US = 8
@@ -164,31 +172,22 @@ def demod_all(sam, bit_error_table):
         else:
             yield snr, msg, x
 
-def w_mvdr(theta, X, d):
-    # steering vector
-    s = np.exp(2j * np.pi * d * np.arange(2) * np.sin(theta))
-    s = s.reshape(-1, 1)
-    R = (X @ X.conj().T) / X.shape[1]
-    Rinv = np.linalg.pinv(R)
-    w = (Rinv @ s) / (s.conj().T @ Rinv @ s)
-    return w
-
 def main():
-    #buffer_samps = MODES_LONG_MSG_SAMPLES * 1024 * 8
-
-    # Multiply by 2 at the end because it's actually 16 bytes
-    # with four RX channels. That's 4 bytes per channel.
     buffer_samps = MODES_LONG_MSG_SAMPLES * 16 * 8 * 2
+
     got_a = 0
     got_b = 0
     got_c = 0
+    got_d = 0
+    got_e = 0
     bit_error_table = modes_init_error_info()
+    
     #
     # The samples in the file are np.int16 and they follow
     # the pattern of:
     #
-    #   AABB..
-    #   IQIQ..
+    #   AABBCCDDAABBCCDD...
+    #   IQIQIQIQIQIQIQIQ...
     #
     # The sampling rate is 2e6. The frequency 1090mhz.
     #
@@ -196,10 +195,14 @@ def main():
         read = 0
         while True:
             chunk = fd.read(buffer_samps)
+            
             read += len(chunk)
+            
             if len(chunk) == 0:
                 break
+            
             s = np.ndarray(int(len(chunk) / 2), np.int16, chunk)
+            # The samples from the blade are only 12-bit.
             ai = s[0::8] / 2049.0
             aq = s[1::8] / 2049.0
             bi = s[2::8] / 2049.0
@@ -207,7 +210,7 @@ def main():
             ci = s[4::8] / 2049.0
             cq = s[5::8] / 2049.0
             di = s[6::8] / 2049.0
-            dq = s[7::8] / 2049.0            
+            dq = s[7::8] / 2049.0
             a = ai + 1j * aq
             b = bi + 1j * bq
             c = ci + 1j * cq
@@ -217,7 +220,7 @@ def main():
 
             thetas = np.linspace(-np.pi * 0.5, np.pi * 0.5, 600)
 
-            # Do all four streams and hope they are coherent.
+            # Do all four streams. Random probing.
             m = {}
             for _ in range(600):
                 theta_b = np.random.random() * np.pi * 2.0 - np.pi
@@ -226,9 +229,25 @@ def main():
                 e = a + b * np.exp(1j * theta_b) + c * np.exp(1j * theta_c) + d * np.exp(1j * theta_d)
                 for snr, msg, ndx in demod_all(e, bit_error_table):
                     if ndx not in m:
-                        print(theta_b, theta_c, theta_d)
+                        #print(msg[0] >> 3)
                         m[ndx] = snr
                         got_a += 1
+
+            m = {}
+            for _ in range(600):
+                theta_b = np.random.random() * np.pi * 2.0 - np.pi
+                theta_c = np.random.random() * np.pi * 2.0 - np.pi
+                theta_d = np.random.random() * np.pi * 2.0 - np.pi
+                amp_a = np.random.random()
+                amp_b = np.random.random()
+                amp_c = np.random.random()
+                amp_d = np.random.random()
+                e = a * amp_a + b * amp_b * np.exp(1j * theta_b) + c * amp_c * np.exp(1j * theta_c) + d * amp_d * np.exp(1j * theta_d)
+                for snr, msg, ndx in demod_all(e, bit_error_table):
+                    if ndx not in m:
+                        #print(msg[0] >> 3)
+                        m[ndx] = snr
+                        got_e += 1
 
             # Just do two streams we know are coherent.
             m = {}
@@ -240,43 +259,26 @@ def main():
                         m[ndx] = snr
                         got_b += 1
 
+            for snr, msg, ndx in demod_all(a, bit_error_table):
+                if ndx not in m:
+                    m[ndx] = snr
+                    got_c += 1
 
-            print('4x', got_a, '2x', got_b, 'read', read / 16.0 / 2e6)
-
-            '''
-            d = 0.48
-
+            spacing = 0.4
+            # -spacing * PI * 2.0f32 * theta.sin() * element_index as f32;
             m = {}
-            for theta in thetas:
-                w = w_mvdr(theta, X, d)
-                Xw = w.conj().T @ X
-                for snr, msg, ndx in demod_all(np.abs(Xw[0]), bit_error_table):
+            for theta in np.linspace(-np.pi * 0.5, np.pi * 0.5, 600):
+                theta_b = -spacing * np.pi * 2.0 * np.sin(theta) * 1
+                theta_c = -spacing * np.pi * 2.0 * np.sin(theta) * 2
+                theta_d = -spacing * np.pi * 2.0 * np.sin(theta) * 3
+                e = a + b * np.exp(1j * theta_b) + c * np.exp(1j * theta_c) + d * np.exp(1j * theta_d)
+                for snr, msg, ndx in demod_all(e, bit_error_table):
                     if ndx not in m:
+                        print(msg[0] >> 3)
                         m[ndx] = snr
-                        got_a += 1
-            
-            m = {}
-            for theta in thetas:
-                w = np.exp(2j * np.pi * d * np.arange(2) * np.sin(theta))
-                w = w.reshape(-1, 1)
-                Xw = w.conj().T @ X
-                for snr, msg, ndx in demod_all(np.abs(Xw[0]), bit_error_table):
-                    if ndx not in m:
-                        m[ndx] = snr         
-                        got_b += 1
-            
-            m = {}
-            probes = 300
-            for _ in range(probes):
-                theta = np.random.random() * np.pi * 2.0 - np.pi
-                c = np.abs(a + b * np.exp(1j * theta))
-                for snr, msg, ndx in demod_all(c, bit_error_table):
-                    if ndx not in m:
-                        m[ndx] = snr
-                        got_c += 1
+                        got_d += 1
 
-            print('MVDR', got_a, 'CONV', got_b, 'RANDOM', got_c, 'read', read / 8 / 2e6)  
-            '''
+            print('4x-random', got_a, '4x-random-amp', got_e, '4x-ula-sweep', got_d, '2x', got_b, '1x', got_c, 'read', read / 16.0 / 2e6)
 
 if __name__ == '__main__':
     main()
