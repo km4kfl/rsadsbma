@@ -124,6 +124,111 @@ struct Args {
     randomize_amplitudes: bool,
 }
 
+use bytemuck::cast_slice;
+use num::complex::Complex;
+use stream::ProcessStreamResult;
+
+fn process_stream_lms(
+    u8_buffer: &[u8],
+    streams: usize,
+    bit_error_table: &HashMap<u32, u16>,
+    seen: &Arc<Mutex<HashMap<u32, Instant>>>  
+) -> Vec<Message> {
+    let buffer: &[i16] = cast_slice(u8_buffer);
+    let mut iq: Vec<Vec<Complex<f32>>> = Vec::new();
+    let mut messages: Vec<Message> = Vec::new();
+
+    for x in 0..streams {
+        iq.push(Vec::new());
+    }
+
+    let mul = streams * 2;
+    for x in 0..buffer.len() / mul {
+        let chunk = &buffer[x * mul..x * mul + mul];
+        for y in 0..streams {
+            iq[y].push(Complex::new(chunk[y * 2 + 0] as f32 / 2049.0, chunk[y * 2 + 1] as f32 / 2049.0));
+        }
+    }
+
+    let soi_bits = vec![1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0];
+    let mut soi: Vec<Complex<f32>> = Vec::new();
+    for x in 0..soi_bits.len() {
+        soi.push(Complex::new(soi_bits[x] as f32, 0.0));
+    }
+
+    let mut samples: Vec<f32> = vec![0.0f32; MODES_LONG_MSG_SAMPLES];
+
+    for x in 0..buffer.len() / mul - MODES_PREAMBLE_SAMPLES - MODES_LONG_MSG_SAMPLES {
+        let mut w_lms = vec![Complex::new(0.0f32, 0.0f32); streams];
+
+        let mu = 0.5e-5f32;
+
+        for i in 0..constants::MODES_PREAMBLE_SAMPLES {
+            let soi_sample = soi[i];
+            let mut sum = Complex::new(0.0f32, 0.0f32);
+            
+            for y in 0..streams {
+                sum += w_lms[y].conj() * iq[y][x + i];
+            }
+
+            let error = soi_sample - sum;
+            
+            for y in 0..streams {
+                w_lms[y] += mu * error.conj() * iq[y][x + i];
+            }
+        }
+
+        for i in 0..constants::MODES_LONG_MSG_SAMPLES {
+            let mut sum = Complex::new(0.0f32, 0.0f32);
+            
+            for y in 0..streams {
+                sum += w_lms[y].conj() * iq[y][x + constants::MODES_PREAMBLE_SAMPLES + i];
+            }
+
+            samples[i] = sum.norm();
+        }
+
+        let mut thebyte: u8 = 0;
+        let mut msg: Vec<u8> = Vec::new();
+
+        for y in 0..samples.len() / 2 {
+            let a: f32 = samples[y * 2 + 0];
+            let b: f32 = samples[y * 2 + 1];
+
+            if a > b {
+                thebyte |= 1;
+            }
+
+            if y & 7 == 7 {
+                msg.push(thebyte);
+            }
+
+            thebyte = thebyte << 1;            
+        }
+
+        match decode::process_result(
+            ProcessStreamResult {
+                snr: 0.0,
+                msg: msg,
+                samples: Vec::new(),
+                ndx: x,
+                thetas: Vec::new(),
+                amplitudes: Vec::new(),
+                pipe_ndx: 0,
+            },
+            bit_error_table,
+            seen
+        ) {
+            Ok(message) => {
+                messages.push(message);
+            },
+            Err(_) => (),
+        }
+    }
+
+    messages
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -186,6 +291,8 @@ fn main() {
             }
         });
     }
+
+    let bit_error_table = crc::modes_init_error_info();
 
     let mut file = match args.file_output {
         Some(v) => {
@@ -296,44 +403,16 @@ fn main() {
 
                         let mut hm: HashMap<u64, Message> = HashMap::new();
                         
-                        pipe_mgmt.send_buffer_to_all(&buffer, streams);
+                        //pipe_mgmt.send_buffer_to_all(&buffer, streams);
 
-                        //println!("getting data from threads");
-                        for rx in &rxs {
-                            //println!("reading from one thread");
-                            for message in rx.recv().unwrap() {
-                                // We are highly likely to get the same message from multiple
-                                // threads. We should take the highest SNR of any duplicates.
-                                match hm.get(&message.common.ndx) {
-                                    Some(other) => {
-                                        // Compare the SNR (signal to noise) ratio
-                                        // and replace the existing if better.
-                                        if other.common.snr < message.common.snr {
-                                            hm.insert(message.common.ndx, message);    
-                                        }
-                                    },
-                                    None => {
-                                        // This was the first time we saw a message at
-                                        // this `message.ndx` (index) in the sample
-                                        // stream.
-                                        hm.insert(message.common.ndx, message);
-                                    },
-                                }
-                            }
-                        }
+                        let messages = process_stream_lms(
+                            &buffer,
+                            streams,
+                            &bit_error_table,
+                            &seen
+                        );
 
-                        let mut items: Vec<(u64, Message)> = hm.into_iter().collect();
-                        // They might be out of order so sort them to ensure they are ordered.
-                        items.sort_by(|a, b| (&a.0).cmp(&b.0));
-                        
-                        // Update all indices to be global offsets. They come as offsets
-                        // into the buffer but since we track the total offset across all
-                        // buffers add them with the base `sample_index`.
-                        for (_, message) in &mut items {
-                            message.common.ndx += sample_index;
-                        }
-
-                        for (_, message) in &items {
+                        for message in &messages {
                             match message.specific {
                                 MessageSpecific::AircraftIdenAndCat { .. } => stat_aiac += 1,
                                 MessageSpecific::SurfacePositionMessage { .. } => stat_spm += 1,
@@ -378,6 +457,8 @@ fn main() {
                                 },
                             }                            
                         }
+
+                        let items = messages.into_iter().map(|x| (x.common.ndx, x)).collect();
 
                         // The message have been demodulated and decoded. Process them to produce
                         // an aircraft entity with attached information. This also computes a
