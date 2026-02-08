@@ -797,7 +797,7 @@ struct Args {
 
     /// If set this will cause the amplitudes to be randomized helping to change the beam pattern.
     #[arg(short, long)]
-    #[clap(default_value_t = true)]
+    #[clap(default_value_t = false)]
     randomize_amplitudes: bool,
 }
 
