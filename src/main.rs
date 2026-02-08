@@ -16,7 +16,7 @@ use std::net::TcpStream;
 use bytemuck::bytes_of;
 use std::time::{Duration, Instant};
 use std::thread;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::collections::HashMap;
 use clap::Parser;
 use std::fs::File;
@@ -124,6 +124,111 @@ struct Args {
     randomize_amplitudes: bool,
 }
 
+use bytemuck::cast_slice;
+use num::complex::Complex;
+use stream::ProcessStreamResult;
+
+fn process_stream_lms(
+    u8_buffer: &[u8],
+    streams: usize,
+    bit_error_table: &HashMap<u32, u16>,
+    seen: &Arc<Mutex<HashMap<u32, Instant>>>  
+) -> Vec<Message> {
+    let buffer: &[i16] = cast_slice(u8_buffer);
+    let mut iq: Vec<Vec<Complex<f32>>> = Vec::new();
+    let mut messages: Vec<Message> = Vec::new();
+
+    for x in 0..streams {
+        iq.push(Vec::new());
+    }
+
+    let mul = streams * 2;
+    for x in 0..buffer.len() / mul {
+        let chunk = &buffer[x * mul..x * mul + mul];
+        for y in 0..streams {
+            iq[y].push(Complex::new(chunk[y * 2 + 0] as f32 / 2049.0, chunk[y * 2 + 1] as f32 / 2049.0));
+        }
+    }
+
+    let soi_bits = vec![1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0];
+    let mut soi: Vec<Complex<f32>> = Vec::new();
+    for x in 0..soi_bits.len() {
+        soi.push(Complex::new(soi_bits[x] as f32, 0.0));
+    }
+
+    let mut samples: Vec<f32> = vec![0.0f32; MODES_LONG_MSG_SAMPLES];
+
+    for x in 0..buffer.len() / mul - MODES_PREAMBLE_SAMPLES - MODES_LONG_MSG_SAMPLES {
+        let mut w_lms = vec![Complex::new(0.0f32, 0.0f32); streams];
+
+        let mu = 0.5e-5f32;
+
+        for i in 0..constants::MODES_PREAMBLE_SAMPLES {
+            let soi_sample = soi[i];
+            let mut sum = Complex::new(0.0f32, 0.0f32);
+            
+            for y in 0..streams {
+                sum += w_lms[y].conj() * iq[y][x + i];
+            }
+
+            let error = soi_sample - sum;
+            
+            for y in 0..streams {
+                w_lms[y] += mu * error.conj() * iq[y][x + i];
+            }
+        }
+
+        for i in 0..constants::MODES_LONG_MSG_SAMPLES {
+            let mut sum = Complex::new(0.0f32, 0.0f32);
+            
+            for y in 0..streams {
+                sum += w_lms[y].conj() * iq[y][x + constants::MODES_PREAMBLE_SAMPLES + i];
+            }
+
+            samples[i] = sum.norm();
+        }
+
+        let mut thebyte: u8 = 0;
+        let mut msg: Vec<u8> = Vec::new();
+
+        for y in 0..samples.len() / 2 {
+            let a: f32 = samples[y * 2 + 0];
+            let b: f32 = samples[y * 2 + 1];
+
+            if a > b {
+                thebyte |= 1;
+            }
+
+            if y & 7 == 7 {
+                msg.push(thebyte);
+            }
+
+            thebyte = thebyte << 1;            
+        }
+
+        match decode::process_result(
+            ProcessStreamResult {
+                snr: 0.0,
+                msg: msg,
+                samples: Vec::new(),
+                ndx: x,
+                thetas: Vec::new(),
+                amplitudes: Vec::new(),
+                pipe_ndx: 0,
+            },
+            bit_error_table,
+            seen
+        ) {
+            Ok(message) => {
+                messages.push(message);
+            },
+            Err(_) => (),
+        }
+    }
+
+    messages
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -139,53 +244,11 @@ fn main() {
     let mut pipe_mgmt = PipeManagement::new(thread_count as usize, cycle_count as usize);
 
     let mut rxs: Vec<Receiver<Vec<Message>>> = Vec::new();
+    let mut txs: Vec<Sender<Vec<u8>>> = Vec::new();
+
     let seen: Arc<Mutex<HashMap<u32, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
 
-    for x in 0..thread_count as usize {
-        let (atx, brx) = channel();
-        let (btx, arx) = channel();
-        pipe_mgmt.push_tx(atx);
-        rxs.push(arx);
-
-        let seen_thread = seen.clone();
-
-        let base_pipe_ndx: usize = x * cycle_count as usize;
-
-        thread::spawn(move || {
-            println!("spawned");
-            let bit_error_table = crc::modes_init_error_info();
-            let mut pipe_theta: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
-            let mut pipe_amps: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
-
-            loop {
-                match brx.recv().unwrap() {
-                    ThreadTxMessage::Buffer(buffer, streams) => {
-                        // This calls into the `stream` module. See that
-                        // module to follow the code.
-                        btx.send(stream::process_buffer(
-                            &buffer,
-                            &bit_error_table,
-                            &pipe_theta,
-                            &pipe_amps,
-                            streams,
-                            &seen_thread,
-                            base_pipe_ndx,
-                            args.randomize_amplitudes
-                        )).unwrap();
-                    },
-                    ThreadTxMessage::SetWeights(pipe_ndx, thetas, amps) => {
-                        pipe_theta[pipe_ndx] = Some(thetas);
-                        pipe_amps[pipe_ndx] = amps;
-                        
-                    },
-                    ThreadTxMessage::UnsetWeights(pipe_ndx) => {
-                        pipe_theta[pipe_ndx] = None;
-                        pipe_amps[pipe_ndx] = None;
-                    },
-                }
-            }
-        });
-    }
+    let bit_error_table = crc::modes_init_error_info();
 
     let mut file = match args.file_output {
         Some(v) => {
@@ -242,6 +305,36 @@ fn main() {
                 }
             };
 
+            for x in 0..thread_count as usize {
+                let (atx, brx) = channel();
+                let (btx, arx) = channel();
+                txs.push(atx);
+                rxs.push(arx);
+
+                let seen_thread = seen.clone();
+
+                let base_pipe_ndx: usize = x * cycle_count as usize;
+
+                thread::spawn(move || {
+                    println!("spawned");
+                    let bit_error_table = crc::modes_init_error_info();
+                    let mut pipe_theta: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
+                    let mut pipe_amps: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
+
+                    loop {
+                        let buffer = brx.recv().unwrap();
+                        let messages = process_stream_lms(
+                            &buffer,
+                            streams,
+                            &bit_error_table,
+                            &seen_thread
+                        );
+                        btx.send(messages).unwrap();
+                    }
+                });
+            }
+
+
             let mut buffer: Vec<u8> = vec![0; MODES_LONG_MSG_SAMPLES * 1024 * (streams * 4)];
 
             // This sets up the pipes for uniform linear array (ULA) mode. It consumes all of the pipes
@@ -296,44 +389,41 @@ fn main() {
 
                         let mut hm: HashMap<u64, Message> = HashMap::new();
                         
-                        pipe_mgmt.send_buffer_to_all(&buffer, streams);
+                        //pipe_mgmt.send_buffer_to_all(&buffer, streams);
+                        
+                        let bytes_per_strip = 4 * streams;
+                        let sample_count = buffer.len() / bytes_per_strip;
+                        let chunk_size: usize = sample_count / thread_count as usize;
+                        let rem: usize = sample_count % thread_count as usize;
+                        
+                        for i in 0..thread_count as usize - 1 {
+                            let chunk_slice: &[u8] = &buffer[i * chunk_size * bytes_per_strip..(i * chunk_size + chunk_size + MODES_LONG_MSG_SAMPLES) * bytes_per_strip];
+                            let chunk: Vec<u8> = chunk_slice.to_vec();
+                            txs[i].send(chunk).unwrap();
+                        }
 
-                        //println!("getting data from threads");
-                        for rx in &rxs {
-                            //println!("reading from one thread");
-                            for message in rx.recv().unwrap() {
-                                // We are highly likely to get the same message from multiple
-                                // threads. We should take the highest SNR of any duplicates.
-                                match hm.get(&message.common.ndx) {
-                                    Some(other) => {
-                                        // Compare the SNR (signal to noise) ratio
-                                        // and replace the existing if better.
-                                        if other.common.snr < message.common.snr {
-                                            hm.insert(message.common.ndx, message);    
-                                        }
-                                    },
-                                    None => {
-                                        // This was the first time we saw a message at
-                                        // this `message.ndx` (index) in the sample
-                                        // stream.
-                                        hm.insert(message.common.ndx, message);
-                                    },
-                                }
+                        let i = thread_count as usize - 1;
+                        let chunk_slice = &buffer[i * chunk_size * bytes_per_strip..(i * chunk_size + chunk_size + rem) * bytes_per_strip];
+                        let chunk: Vec<u8> = chunk_slice.to_vec();
+                        txs[i].send(chunk).unwrap();
+
+                        let mut messages: Vec<Message> = Vec::new();
+
+                        for i in 0..thread_count as usize {
+                            let msgs = rxs[i].recv().unwrap();
+                            for msg in msgs {
+                                messages.push(msg);
                             }
                         }
 
-                        let mut items: Vec<(u64, Message)> = hm.into_iter().collect();
-                        // They might be out of order so sort them to ensure they are ordered.
-                        items.sort_by(|a, b| (&a.0).cmp(&b.0));
-                        
-                        // Update all indices to be global offsets. They come as offsets
-                        // into the buffer but since we track the total offset across all
-                        // buffers add them with the base `sample_index`.
-                        for (_, message) in &mut items {
-                            message.common.ndx += sample_index;
-                        }
+                        //let messages = process_stream_lms(
+                        //    &buffer,
+                        //    streams,
+                        //    &bit_error_table,
+                        //    &seen
+                        //);
 
-                        for (_, message) in &items {
+                        for message in &messages {
                             match message.specific {
                                 MessageSpecific::AircraftIdenAndCat { .. } => stat_aiac += 1,
                                 MessageSpecific::SurfacePositionMessage { .. } => stat_spm += 1,
@@ -378,6 +468,8 @@ fn main() {
                                 },
                             }                            
                         }
+
+                        let items = messages.into_iter().map(|x| (x.common.ndx, x)).collect();
 
                         // The message have been demodulated and decoded. Process them to produce
                         // an aircraft entity with attached information. This also computes a

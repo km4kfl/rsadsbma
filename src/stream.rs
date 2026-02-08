@@ -41,6 +41,7 @@ pub fn process_stream_mfloat32(
         let snr: f32;
 
         {
+            // The preamble is 1010000101000000.
             let p = &stream[x..x + constants::MODES_PREAMBLE_SAMPLES];
             let valid: bool = (p[0] > p[1]) && (p[1] < p[2]) && (p[2] > p[3]) && (p[3] < p[0]) && 
                             (p[4] < p[0]) && (p[5] < p[0]) && (p[6] < p[0]) && (p[7] > p[8]) &&

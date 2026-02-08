@@ -94,25 +94,7 @@ impl PipeManagement {
         thetas: Vec<f32>,
         amps: Option<Vec<f32>>
     ) -> bool {
-        match self.addr_to_pipe.get(&addr) {
-            Some((thread_ndx, pipe_ndx)) => {
-                self.txs[*thread_ndx].send(ThreadTxMessage::SetWeights(*pipe_ndx, thetas, amps)).unwrap();
-                true
-            },
-            None => {
-                for x in 0..self.pipe_to_addr.len() {
-                    if self.pipe_to_addr[x].is_none() {
-                        self.pipe_to_addr[x] = Some(addr);
-                        let thread_ndx = x / self.pipe_count;
-                        let pipe_ndx = x - thread_ndx * self.pipe_count;
-                        self.addr_to_pipe.insert(addr, (thread_ndx, pipe_ndx));
-                        self.txs[thread_ndx].send(ThreadTxMessage::SetWeights(pipe_ndx, thetas, amps)).unwrap();
-                        return true;
-                    }
-                }
-                false
-            },
-        }
+        false
     }
 
     /// Sends a buffer to all threads to be processed.
