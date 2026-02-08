@@ -919,11 +919,15 @@ fn main() {
 
             let mut buffer: Vec<u8> = vec![0; MODES_LONG_MSG_SAMPLES * 1024 * (streams * 4)];
 
+            // This sets up the pipes for uniform linear array (ULA) mode. It consumes all of the pipes
+            // currently so there won't be any left to try to track airplanes.
             match args.ula_spacing_wavelength {
                 None => (),
                 Some(spacing) => {
+                    // `spacing` is the distance of each element from the other element in wavelengths
                     let total_pipes = thread_count * cycle_count;
 
+                    // We are going to map -PI/2 to PI/2 to the total pipes.
                     let slice = PI / (total_pipes as f32 - 1.0);
 
                     for n in 0..total_pipes {
@@ -931,11 +935,19 @@ fn main() {
                         
                         let mut thetas: Vec<f32> = Vec::with_capacity(streams - 1);
 
+                        // The first theta is always zero so we don't even calculate it. Also,
+                        // the code that uses these thetas already expects the first element to
+                        // have a theta of zero so we only need to pass minus one the number of
+                        // thetas.
                         for element_index in 1..streams {
+                            // The conjugate of the phase difference. We have to reverse that]
+                            // phase different so they all recieve signals aligned in phase from
+                            // this direction `theta`.
                             let shift = -spacing * PI * 2.0f32 * theta.sin() * element_index as f32;
                             thetas.push(shift);
                         }
 
+                        // This communicates with the threads using a global pipe index.
                         pipe_mgmt.set_pipe_to_theta(n as usize, 0, Some(thetas), None);
                     }
                 },
