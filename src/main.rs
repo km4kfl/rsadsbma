@@ -441,22 +441,46 @@ fn process_result(
 
 /// Serialize the common elements of a message to a file.
 fn write_message_to_file(file: &mut File, m: &Message) {
+    /*
+        The message format.
+        
+        u16; message byte count
+        [u8]; message bytes as array
+        u16; sample count
+        [i16]; samples as array
+        u64; sample stream index
+        f32; snr
+        u8; count of theta values
+        [f32]; theta values as array
+        u8; count of amplitude values
+        [f32]; amplitude values as array
+    */
+    // u16; message byte count
     file.write_all(bytes_of(&(m.common.msg.len() as u16))).unwrap();
+    // u8; message bytes
     file.write_all(&m.common.msg).unwrap();
+    // u16; sample count
     file.write_all(bytes_of(&(m.common.samples.len() as u16))).unwrap();
+    // i16; samples
     for x in 0..m.common.samples.len() {
         file.write_all(bytes_of(&m.common.samples[x])).unwrap();
     }
+    // u64; global sample stream offset
     file.write_all(bytes_of(&m.common.ndx)).unwrap();
+    // f32; snr
     file.write_all(bytes_of(&m.common.snr)).unwrap();
     let thetas = &m.common.thetas;
+    // u8; count of theta values
     file.write_all(bytes_of(&(thetas.len() as u8))).unwrap();
     for theta in thetas {
+        // f32; theta value
         file.write_all(bytes_of(theta)).unwrap();
     }
     let amplitudes = &m.common.amplitudes;
+    // u8; count of amplitude values
     file.write_all(bytes_of(&(m.common.amplitudes.len() as u8))).unwrap();
     for amp in amplitudes {
+        // f32; amplitude value
         file.write_all(bytes_of(amp)).unwrap();
     }
 }
