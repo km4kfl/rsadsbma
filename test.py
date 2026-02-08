@@ -3,6 +3,9 @@ This reads the output by the `main.rs` program.
 '''
 import struct
 import numpy as np
+import math
+import matplotlib.pyplot as plt
+import pickle
 
 MODES_PREAMBLE_US = 8
 MODES_PREAMBLE_SAMPLES = MODES_PREAMBLE_US * 2
@@ -107,16 +110,6 @@ def fix_bit_errors(msg, bit_error_table):
     
     return len(pei)
 
-class Message:
-    def __init__(self, msg, samples, ndx, snr, theta, aa, ab):
-        self.msg = msg
-        self.samples = samples
-        self.ndx = ndx
-        self.snr = snr
-        self.theta = theta  # theta for antenna B for phase shift
-        self.aa = aa        # amplitude of antenna A
-        self.ab = ab        # amplitude of antenna B
-
 def bits_to_bytes(bits):
     thebyte = 0
     out = []
@@ -158,12 +151,263 @@ def demod(sam):
 
     return snr, bits_to_bytes(msg)
 
-def process_message(message):
-    pass
+def process_msg(msg, snr, bit_error_table):
+    is_long = ((msg[0] >> 3) & 0x10) == 0x10
+
+    if is_long and len(msg) == MODES_SHORT_MSG_BYTES:
+        # The message is long but it's a short message. Nothing can be done.
+        return
+
+    if not is_long:
+        msg = msg[0:MODES_SHORT_MSG_BYTES]
+
+    msgtype = msg[0] >> 3
+
+    crc_syndrome = modes_checksum(msg)
+    crc_ok = crc_syndrome == 0
+
+    ca = msg[0] & 7
+    addr = (msg[1] << 16) | (msg[2] << 8) | msg[3]
+    metype = msg[4] >> 3
+    mesub = msg[4] & 7
+    fs = msg[0] & 7
+    dr = (msg[1] >> 3) & 31
+    um = ((msg[1] & 7) << 3) | (msg[2] >> 5)
+    _a = ((msg[3] & 0x80) >> 5) | ((msg[2] & 0x02) >> 0) | ((msg[2] & 0x08) >> 3)
+    _b = ((msg[3] & 0x02) << 1) | ((msg[3] & 0x08) >> 2) | ((msg[3] & 0x20) >> 5)
+    _c = ((msg[2] & 0x01) << 2) | ((msg[2] & 0x04) >> 1) | ((msg[2] & 0x10) >> 4)
+    _d = ((msg[3] & 0x01) << 2) | ((msg[3] & 0x04) >> 1) | ((msg[3] & 0x10) >> 4)
+    identity = _a * 1000 + _b * 100 + _c * 10 + _d
+
+    data = {
+        'msgtype': msgtype,
+        'msg': msg,
+        'log': [],
+        'addr': addr,
+        'snr': float(snr),
+    }
+
+    if not crc_ok and (msgtype == 11 or msgtype == 17 or msgtype == 18):
+        nfixed = fix_bit_errors(msg, bit_error_table)
+        if nfixed == 0:
+            # The number of bit errors exceeded 1 and 2 or CRC corrupted.
+            return    
+        print('fixed bit errors', nfixed)
+        crc_syndrome = modes_checksum(msg)
+        if crc_syndrome != 0:
+            print(msgtype, 'didnt fix')
+            return
+        crc_ok = True
+    
+    if not crc_ok:
+        return
+
+    # https://github.com/antirez/dump1090/
+    if msgtype == 0 or msgtype == 4 or msgtype == 16 or msgtype == 20:
+        data['altitude'] = decode_ac13_field(msg)
+    
+    if msgtype == 17 or msgtype == 18:
+        if metype >= 1 and metype <= 4:
+            aircraft_type = f'{chr(ord('A') + 4 - metype)}{mesub:d}'
+            chars = (msg[5] << 16) | (msg[6] << 8) | msg[7]
+            flight = []
+            for y in range(4):
+                flight.append(AIS_CHARSET[chars & 0x3f])
+                chars = chars >> 6
+            chars = (msg[8] << 16) | (msg[9] << 8) | msg[10]
+            for y in range(4):
+                flight.append(AIS_CHARSET[chars & 0x3f])
+                chars = chars >> 6
+            flight = ''.join(flight)
+            data['aircraft_type'] = aircraft_type
+            data['flight'] = flight
+        elif metype >= 5 and metype <= 8:
+            # surface position message
+            movement = ((msg[4] & 0x7) << 4) | (msg[5] >> 4)
+            if movement != 0:
+                data['movement'] = movement
+            if (msg[5] >> 3) & 1:
+                data['ground_track'] = ((msg[5] & 0x07) << 4) | (msg[6] >> 4)
+                data['ground_track'] = data['ground_track'] * 360 / 128
+            data['f_flag'] =  (msg[6] >> 2) & 1
+            data['t_flag'] =  (msg[6] >> 3) & 1
+            data['raw_latitude'] = ((msg[6] & 3) << 15) | (msg[7] << 7) | (msg[8] >> 1)
+            data['raw_longitude'] = ((msg[8] & 1) << 16) | (msg[9] << 8) | (msg[10])
+        elif metype >= 9 and metype <= 18:
+            data['f_flag'] =  (msg[6] >> 2) & 1
+            data['t_flag'] =  (msg[6] >> 3) & 1
+            ac12field = ((msg[5] << 4) | (msg[6] >> 4)) & 0x0FFF
+            if ac12field > 0:
+                if ac12field & 0x10:
+                    n = ((ac12field & 0xfe0) >> 1) | (ac12field & 0x000f)
+                    altitude = n * 25 - 1000
+                    data['altitude'] = altitude
+                else:
+                    n = ((ac12field & 0xfc0) << 1) | (ac12field & 0x3f)
+                    data['log'].append('altitude not implemented for ac12field in metype >= 9')
+                    # This is in the original code but I have not
+                    # finished the translation here for the function
+                    # ModeAToModeC found in `mode_ac.c`.
+
+                    # ModeAToModeC(decode_id13_field(n))
+                    #if n < -12:
+                    #    n = 0
+                    #altitude = n * 100           
+            data['raw_latitude'] = ((msg[6] & 3) << 15) | (msg[7] << 7) | (msg[8] >> 1)
+            data['raw_longitude'] = ((msg[8] & 1) << 16) | (msg[9] << 8) | (msg[10])
+        elif metype == 19 and mesub >= 1 and mesub <= 4:
+            if mesub == 1 or mesub == 2:
+                ew_dir = (msg[5] & 4) >> 2
+                ew_velocity = ((msg[5] & 3) << 8) | msg[6]
+                ns_dir = (msg[7] & 0x80) >> 7
+                ns_velocity = ((msg[7] & 0x7f) << 3) | ((msg[8] & 0xe0) >> 5)
+                vert_rate_source = (msg[8] & 0x10) >> 4
+                vert_rate_sign = (msg[8] & 0x8) >> 3
+                vert_rate = ((msg[8] & 7) << 6) | ((msg[9] & 0xfc) >> 2)
+                # Compute velocity and angle from the two speed components.
+                velocity = math.sqrt(ns_velocity * ns_velocity + ew_velocity * ew_velocity)
+                if velocity > 0:
+                    ewv = ew_velocity
+                    nsv = ns_velocity
+
+                    if ew_dir:
+                        ewv *= -1
+                    if ns_dir:
+                        nsv *= -1
+                    heading = math.atan2(ewv,nsv)
+
+                    # Convert to degrees.
+                    heading = heading * 360 / (math.pi * 2)
+                    # We don't want negative values but a 0-360 scale.
+                    if heading < 0: 
+                        heading += 360
+                else:
+                    heading = 0
+                data['heading'] = heading
+                data['velocity'] = velocity
+                data['ew_velocity'] = ewv
+                data['ns_velocity'] = nsv
+        elif mesub == 3 or mesub == 4:
+            if msg[5] & (1 << 2):
+                data['heading'] = (360.0 / 128) * (((msg[5] & 3) << 5) | (msg[6] >> 3))
+    return data
+
+def cpr_nl_function(lat):
+    if lat < 0: lat = -lat              # Table is symmetric about the equator.
+    if lat < 10.47047130: return 59
+    if lat < 14.82817437: return 58
+    if lat < 18.18626357: return 57
+    if lat < 21.02939493: return 56
+    if lat < 23.54504487: return 55
+    if lat < 25.82924707: return 54
+    if lat < 27.93898710: return 53
+    if lat < 29.91135686: return 52
+    if lat < 31.77209708: return 51
+    if lat < 33.53993436: return 50
+    if lat < 35.22899598: return 49
+    if lat < 36.85025108: return 48
+    if lat < 38.41241892: return 47
+    if lat < 39.92256684: return 46
+    if lat < 41.38651832: return 45
+    if lat < 42.80914012: return 44
+    if lat < 44.19454951: return 43
+    if lat < 45.54626723: return 42
+    if lat < 46.86733252: return 41
+    if lat < 48.16039128: return 40
+    if lat < 49.42776439: return 39
+    if lat < 50.67150166: return 38
+    if lat < 51.89342469: return 37
+    if lat < 53.09516153: return 36
+    if lat < 54.27817472: return 35
+    if lat < 55.44378444: return 34
+    if lat < 56.59318756: return 33
+    if lat < 57.72747354: return 32
+    if lat < 58.84763776: return 31
+    if lat < 59.95459277: return 30
+    if lat < 61.04917774: return 29
+    if lat < 62.13216659: return 28
+    if lat < 63.20427479: return 27
+    if lat < 64.26616523: return 26
+    if lat < 65.31845310: return 25
+    if lat < 66.36171008: return 24
+    if lat < 67.39646774: return 23
+    if lat < 68.42322022: return 22
+    if lat < 69.44242631: return 21
+    if lat < 70.45451075: return 20
+    if lat < 71.45986473: return 19
+    if lat < 72.45884545: return 18
+    if lat < 73.45177442: return 17
+    if lat < 74.43893416: return 16
+    if lat < 75.42056257: return 15
+    if lat < 76.39684391: return 14
+    if lat < 77.36789461: return 13
+    if lat < 78.33374083: return 12
+    if lat < 79.29428225: return 11
+    if lat < 80.24923213: return 10
+    if lat < 81.19801349: return 9
+    if lat < 82.13956981: return 8
+    if lat < 83.07199445: return 7
+    if lat < 83.99173563: return 6
+    if lat < 84.89166191: return 5
+    if lat < 85.75541621: return 4
+    if lat < 86.53536998: return 3
+    if lat < 87.00000000: return 2
+    else:
+        return 1
+
+def cpr_mod_function(a, b):
+    res = a % b
+    if res < 0:
+        res += b
+    return res
+
+def cpr_n_function(lat, isodd):
+    nl = cpr_nl_function(lat) - isodd
+    if nl < 1:
+        nl = 1
+    return nl
+
+def cpr_dlon_function(lat, isodd):
+    return 360.0 / cpr_n_function(lat, isodd)
+
+def decode_cpr(even_cprlat, even_cprlon, even_cprts, odd_cprlat, odd_cprlon, odd_cprts):
+    air_dlat0 = 360.0 / 60.0
+    air_dlat1 = 360.0 / 59.0
+    lat0 = even_cprlat
+    lat1 = odd_cprlat
+    lon0 = even_cprlon
+    lon1 = odd_cprlon
+
+    j = math.floor(((59.0 * lat0 - 60.0 * lat1) / 131072.0) + 0.5)
+    rlat0 = air_dlat0 * (cpr_mod_function(j, 60.0) + lat0 / 131072.0)
+    rlat1 = air_dlat1 * (cpr_mod_function(j, 59.0) + lat1 / 131072.0)
+
+    if rlat0 >= 270.0:
+        rlat0 -= 360.0
+    if rlat1 >= 270.0:
+        rlat1 -= 360.0
+
+    if cpr_nl_function(rlat0) != cpr_nl_function(rlat1):
+        return
+    
+    if even_cprts > odd_cprts:
+        ni = cpr_n_function(rlat0, 0)
+        m = math.floor((((lon0 * (cpr_nl_function(rlat0) - 1)) - (lon1 * cpr_nl_function(rlat0))) / 131072.0) + 0.5)
+        lon = cpr_dlon_function(rlat0, 0) * (cpr_mod_function(m, ni) + lon0 / 131072.0)
+        lat = rlat0
+    else:
+        ni = cpr_n_function(rlat1, 1);
+        m = math.floor((((lon0 * (cpr_nl_function(rlat1) - 1)) - (lon1 * cpr_nl_function(rlat1))) / 131072.0) + 0.5)
+        lon = cpr_dlon_function(rlat1, 1) * (cpr_mod_function(m, ni) + lon1 / 131072.0)
+        lat = rlat1
+    if lon > 180:
+        lon -= 360.0
+    
+    return lat, lon
 
 def main():
     q = 0
-    lq = None
+    byaddr = {}
     with open('output.bin', 'rb') as fd:
         while True:
             msg_len_raw = fd.read(2)
@@ -174,44 +418,164 @@ def main():
             samples_len = struct.unpack('<H', fd.read(2))[0]
             samples = fd.read(samples_len * 2)
             samples = np.ndarray(samples_len, np.int16, samples)
-            fmt = '<Qffff'
+            fmt = '<Qf'
             hdrsz = struct.calcsize(fmt)
-            ndx, snr, theta, aa, ab = struct.unpack(fmt, fd.read(hdrsz))
-            if aa != 1.0 or ab == 0.0:
-                # skip only antenna A
-                # skip only antenna B
-                continue
-            m = Message(msg, samples, ndx, snr, theta, aa, ab)
+            ndx, snr = struct.unpack(fmt, fd.read(hdrsz))
+            cnt = fd.read(1)[0]
+            thetas = []
+            for _ in range(cnt):
+                thetas.append(struct.unpack('<f', fd.read(4))[0])
+            cnt = fd.read(1)[0]
+            amps = []
+            for _ in range(cnt):
+                amps.append(struct.unpack('<f', fd.read(4))[0])
+
             msgtype = msg[0] >> 3
+            addr = (msg[1] << 16) | (msg[2] << 8) | msg[3]
 
-            if lq is not None and lq == msg:
-                print('dup', ndx, lqndx)
+            if addr not in byaddr:
+                byaddr[addr] = []
+            
+            byaddr[addr].append((ndx, msg, thetas))
 
-            lq = msg
-            lqndx = ndx 
-
-            #print(ndx)
-            '''
-            ai = samples[0::4] / 2049.0
-            aq = samples[1::4] / 2049.0
-            bi = samples[2::4] / 2049.0
-            bq = samples[3::4] / 2049.0
+            ai = samples[0::8] / 2049.0
+            aq = samples[1::8] / 2049.0
+            bi = samples[2::8] / 2049.0
+            bq = samples[3::8] / 2049.0
+            ci = samples[4::8] / 2049.0
+            cq = samples[5::8] / 2049.0
+            di = samples[6::8] / 2049.0
+            dq = samples[7::8] / 2049.0
             a = ai + 1j * aq
             b = bi + 1j * bq
-            c = a * aa + b * np.exp(1j * theta) * ab
-            cm = np.abs(c)
-            res = demod(cm)
-            if res is None:
-                print('failed')
-            '''
+            c = ci + 1j * cq
+            d = di + 1j * dq
+            e = a + b * np.exp(1j * thetas[0]) + c * np.exp(1j * thetas[1]) + d * np.exp(1j * thetas[2])
+
+            e = np.abs(e)
+
+            print(e[0:16])
+
+            snr, msg = demod(e)
+            print(snr, msg)
+            exit()
+
+            best_snr = snr
 
             if modes_checksum(msg) != 0:
                 # skip anything without a good CRC
                 continue
-
-            addr = (msg[1] << 16) | (msg[2] << 8) | msg[3]
             
             q += 1
+
+    bit_error_table = modes_init_error_info()
+    
+    sps = 2e6
+
+    fd = open('trainingdata.pickle', 'ab')
+
+    x = []
+    y = []
+
+    for addr in byaddr:
+        out = []
+        msgs = byaddr[addr]
+        even_cprlat = None
+        even_cprlon = None
+        even_cprts = None
+        odd_cprlat = None
+        odd_cprlon = None
+        odd_cprts = None
+        alt = None
+        heading = None
+        velocity = None
+        for ndx, msg, thetas in msgs:
+            data = process_msg(msg, 0.0, bit_error_table)
+            if 'raw_latitude' in data:
+                raw_lat = data['raw_latitude']
+                raw_lon = data['raw_longitude']
+                if data['f_flag']:
+                    odd_cprlat = raw_lat
+                    odd_cprlon = raw_lon
+                    odd_cprts = ndx / sps
+                    ts = ndx / sps 
+                else:
+                    even_cprlat = raw_lat
+                    even_cprlon = raw_lon
+                    even_cprts = ndx / sps
+                    ts = ndx / sps 
+                if odd_cprts is not None and even_cprts is not None:
+                    delta = abs(even_cprts - odd_cprts)
+                    if delta < 10.0:
+                        res = decode_cpr(even_cprlat, even_cprlon, even_cprts, odd_cprlat, odd_cprlon, odd_cprts)
+                        if res is not None:
+                            lat, lon = res
+                            out.append((3, lat, lon, ts))
+                            if 'altitude' in data:
+                                alt = data['altitude']
+                                out.append((1, alt, ts))
+                            out.append((4, thetas, ts))
+            else:
+                ts = ndx / sps
+                # heading, velocity, altitude
+                if 'heading' in data:
+                    heading = data['heading']
+                    out.append((0, heading, ts))
+                    out.append((4, thetas, ts))
+                if 'altitude' in data:
+                    altitude = data['altitude']
+                    out.append((1, altitude, ts))
+                    out.append((4, thetas, ts))
+                if 'velocity' in data:
+                    velocity = data['velocity']
+                    out.append((2, velocity, ts))
+                    out.append((4, thetas, ts))
+
+        print(f'==={addr}===')
+        head = None
+        head_ts = 0
+        vel = None
+        vel_ts = 0
+        alt = None
+        alt_ts = 0
+        lat = None
+        lon = None
+        lat_ts = 0
+        for item in out:
+            if item[0] == 0:
+                head = item[1]
+                head_ts = item[2]
+            elif item[0] == 1:
+                alt = item[1]
+                alt_ts = item[2]
+            elif item[0] == 2:
+                vel = item[1]
+                vel_ts = item[2]
+            elif item[0] == 3:
+                lat = item[1]
+                lon = item[2]
+                lat_ts = item[3]
+            
+            if head is not None and alt is not None and vel is not None and lat is not None:
+                ts_min = min(head_ts, alt_ts, vel_ts, lat_ts)
+                ts_max = max(head_ts, alt_ts, vel_ts, lat_ts)
+                delta = ts_max - ts_min
+                if delta < 10:
+                    #print(head, alt, vel, lat, lon, ts_min)
+                    if item[0] == 4:
+                        thetas = item[1]
+                        ts = item[2]
+                        # lat, lon, thetas
+                        # 32.59318 -86.07717
+                        hlat = 32.59318
+                        hlon = -86.07717
+                        print(lat, lon, thetas)
+                        x.append(lat - hlat)
+                        y.append(lon - hlon)
+                        #pickle.dump([lat, lon, thetas], fd)
+
+    plt.scatter(x, y)
+    plt.show()
 
 if __name__ == '__main__':
     main()
