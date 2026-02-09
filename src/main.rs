@@ -209,6 +209,111 @@ fn process_stream_lms(
     messages
 }
 
+use bytemuck::cast_slice;
+use num::complex::Complex;
+use stream::ProcessStreamResult;
+
+fn process_stream_lms(
+    u8_buffer: &[u8],
+    streams: usize,
+    bit_error_table: &HashMap<u32, u16>,
+    seen: &Arc<Mutex<HashMap<u32, Instant>>>  
+) -> Vec<Message> {
+    let buffer: &[i16] = cast_slice(u8_buffer);
+    let mut iq: Vec<Vec<Complex<f32>>> = Vec::new();
+    let mut messages: Vec<Message> = Vec::new();
+
+    for x in 0..streams {
+        iq.push(Vec::new());
+    }
+
+    let mul = streams * 2;
+    for x in 0..buffer.len() / mul {
+        let chunk = &buffer[x * mul..x * mul + mul];
+        for y in 0..streams {
+            iq[y].push(Complex::new(chunk[y * 2 + 0] as f32 / 2049.0, chunk[y * 2 + 1] as f32 / 2049.0));
+        }
+    }
+
+    let soi_bits = vec![1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0];
+    let mut soi: Vec<Complex<f32>> = Vec::new();
+    for x in 0..soi_bits.len() {
+        soi.push(Complex::new(soi_bits[x] as f32, 0.0));
+    }
+
+    let mut samples: Vec<f32> = vec![0.0f32; MODES_LONG_MSG_SAMPLES];
+
+    for x in 0..buffer.len() / mul - MODES_PREAMBLE_SAMPLES - MODES_LONG_MSG_SAMPLES {
+        let mut w_lms = vec![Complex::new(0.0f32, 0.0f32); streams];
+
+        let mu = 0.5e-5f32;
+
+        for i in 0..constants::MODES_PREAMBLE_SAMPLES {
+            let soi_sample = soi[i];
+            let mut sum = Complex::new(0.0f32, 0.0f32);
+            
+            for y in 0..streams {
+                sum += w_lms[y].conj() * iq[y][x + i];
+            }
+
+            let error = soi_sample - sum;
+            
+            for y in 0..streams {
+                w_lms[y] += mu * error.conj() * iq[y][x + i];
+            }
+        }
+
+        for i in 0..constants::MODES_LONG_MSG_SAMPLES {
+            let mut sum = Complex::new(0.0f32, 0.0f32);
+            
+            for y in 0..streams {
+                sum += w_lms[y].conj() * iq[y][x + constants::MODES_PREAMBLE_SAMPLES + i];
+            }
+
+            samples[i] = sum.norm();
+        }
+
+        let mut thebyte: u8 = 0;
+        let mut msg: Vec<u8> = Vec::new();
+
+        for y in 0..samples.len() / 2 {
+            let a: f32 = samples[y * 2 + 0];
+            let b: f32 = samples[y * 2 + 1];
+
+            if a > b {
+                thebyte |= 1;
+            }
+
+            if y & 7 == 7 {
+                msg.push(thebyte);
+            }
+
+            thebyte = thebyte << 1;            
+        }
+
+        match decode::process_result(
+            ProcessStreamResult {
+                snr: 0.0,
+                msg: msg,
+                samples: Vec::new(),
+                ndx: x,
+                thetas: Vec::new(),
+                amplitudes: Vec::new(),
+                pipe_ndx: 0,
+            },
+            bit_error_table,
+            seen
+        ) {
+            Ok(message) => {
+                messages.push(message);
+            },
+            Err(_) => (),
+        }
+    }
+
+    messages
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -226,6 +331,8 @@ fn main() {
     let mut txs: Vec<Sender<Vec<u8>>> = Vec::new();
 
     let seen: Arc<Mutex<HashMap<u32, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
+
+    let bit_error_table = crc::modes_init_error_info();
 
     let bit_error_table = crc::modes_init_error_info();
 
