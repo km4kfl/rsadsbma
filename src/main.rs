@@ -102,9 +102,15 @@ struct Args {
     #[arg(short, long)]
     net_raw_out: Option<String>,
 
+    /// The `mu` for the LMS beamformer.
     #[arg(short, long)]
     #[clap(default_value_t = 0.5e-4f32)]
     mu: f32,
+
+    /// If false we use the CRC to check for a message which consumes more CPU.
+    #[arg(short, long)]
+    #[clap(default_value_t = false)]
+    check_preamble: bool,
 }
 
 use stream::ProcessStreamResult;
@@ -114,8 +120,8 @@ fn process_stream_lms(
     streams: usize,
     bit_error_table: &HashMap<u32, u16>,
     seen: &Arc<Mutex<HashMap<u32, Instant>>>,
-    mu: f32
-
+    mu: f32,
+    check_preamble: bool
 ) -> Vec<Message> {
     let buffer: &[i16] = cast_slice(u8_buffer);
     let mut iq: Vec<Vec<Complex<f32>>> = Vec::new();
@@ -141,7 +147,10 @@ fn process_stream_lms(
         soi.push(Complex::new(soi_bits[x] as f32, 0.0));
     }
 
+    // The samples for the message content. No preamble.
     let mut samples: Vec<f32> = vec![0.0f32; MODES_LONG_MSG_SAMPLES];
+    // The preamble.
+    let mut p: Vec<f32> = vec![0.0f32; MODES_PREAMBLE_SAMPLES];
 
     for x in 0..buffer.len() / mul - MODES_PREAMBLE_SAMPLES - MODES_LONG_MSG_SAMPLES {
         let mut w_lms = vec![Complex::new(0.0f32, 0.0f32); streams];
@@ -163,6 +172,42 @@ fn process_stream_lms(
             for y in 0..streams {
                 w_lms[y] += mu * error.conj() * iq[y][x + i];
             }
+        }
+
+        let snr: f32;
+
+        if check_preamble {
+            for i in 0..constants::MODES_PREAMBLE_SAMPLES {
+                let mut sum = Complex::new(0.0f32, 0.0f32);
+                
+                // Apply the final weights we got to the sample stream one sample at a time.
+                for y in 0..streams {
+                    sum += w_lms[y].conj() * iq[y][x + i];
+                }
+
+                p[i] = sum.norm();
+            }
+
+            let valid: bool = (p[0] > p[1]) && (p[1] < p[2]) && (p[2] > p[3]) && (p[3] < p[0]) && 
+                            (p[4] < p[0]) && (p[5] < p[0]) && (p[6] < p[0]) && (p[7] > p[8]) &&
+                            (p[8] < p[9]) && (p[9] > p[6]);
+            if !valid {
+                continue;
+            }
+
+            let high: f32 = (p[0] + p[2] + p[7] + p[9]) / 6.0f32;
+
+            if (p[4] >= high) || (p[5] >= high) {
+                continue;
+            }
+
+            if (p[11] > high) || (p[12] > high) || (p[13] > high) || (p[14] > high) {
+                continue;
+            }
+
+            snr = (p[0] - p[1]) + (p[2] - p[3]) + (p[7] - p[6]) + (p[9] - p[8]);            
+        } else {
+            snr = 0.0;
         }
 
         for i in 0..constants::MODES_LONG_MSG_SAMPLES {
@@ -199,7 +244,7 @@ fn process_stream_lms(
 
         match decode::process_result(
             ProcessStreamResult {
-                snr: 0.0,
+                snr: snr,
                 msg: msg,
                 samples: Vec::new(),
                 ndx: x,
@@ -316,7 +361,8 @@ fn main() {
                             streams,
                             &bit_error_table,
                             &seen_thread,
-                            args.mu
+                            args.mu,
+                            args.check_preamble
                         );
                         btx.send(messages).unwrap();
                     }
