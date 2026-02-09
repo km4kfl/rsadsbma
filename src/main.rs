@@ -409,7 +409,8 @@ fn main() {
 
                         for i in 0..thread_count as usize {
                             let msgs = rxs[i].recv().unwrap();
-                            for msg in msgs {
+                            for mut msg in msgs {
+                                msg.common.ndx += sample_index;
                                 messages.push(msg);
                             }
                         }

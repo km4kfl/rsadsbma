@@ -173,7 +173,7 @@ pub fn process_messages(
     weighted_avg_depth: usize
 ) {
     for (buffer_sample_index, m) in messages {
-        let sample_index = buffer_sample_index as u64 + buffer_start_sample_index;
+        let sample_index = buffer_sample_index as u64;
 
         match m.specific {
             MessageSpecific::AirborneVelocityMessageShort {
@@ -182,6 +182,7 @@ pub fn process_messages(
             } => {
                 init_entity_if_not(hdr.addr, entities);
                 let ent = entities.get_mut(&hdr.addr).unwrap();
+                ent.last_update = sample_index;
                 ent.message_count += 1;
 
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
@@ -210,6 +211,7 @@ pub fn process_messages(
             } => {
                 init_entity_if_not(hdr.addr, entities);
                 let ent = entities.get_mut(&hdr.addr).unwrap();
+                ent.last_update = sample_index;
                 ent.message_count += 1;
 
                 ent.check_if_in_beam(pipe_mgmt, m.common.pipe_ndx);
