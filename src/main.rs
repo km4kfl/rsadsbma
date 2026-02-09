@@ -92,10 +92,6 @@ struct Args {
     #[arg(short, long)]
     thread_count: u32,
 
-    /// Number of cycles per thread.
-    #[arg(short, long)]
-    cycle_count: u32,
-
     /// A file prefix to write messages.
     #[arg(short, long)]
     file_output: Option<String>,
@@ -104,24 +100,9 @@ struct Args {
     #[arg(short, long)]
     net_raw_out: Option<String>,
 
-    /// Uniform Linear Array mode. Provide the spacing of the elements in wavelength. Use 0.5 for half a wavelength.
     #[arg(short, long)]
-    ula_spacing_wavelength: Option<f32>,
-
-    /// Scales the SNR's weight in the weighted average.
-    #[arg(short, long)]
-    #[clap(default_value_t = 40.0)]
-    snr_scaler: f32,
-
-    /// The depth or count of the items used in the rolling average calculation for the tracking steering vector.
-    #[arg(short, long)]
-    #[clap(default_value_t = 3)]
-    weighted_avg_depth: usize,
-
-    /// If set this will cause the amplitudes to be randomized helping to change the beam pattern.
-    #[arg(short, long)]
-    #[clap(default_value_t = false)]
-    randomize_amplitudes: bool,
+    #[clap(default_value_t = 0.5e-4f32)]
+    mu: f32,
 }
 
 use bytemuck::cast_slice;
@@ -132,7 +113,8 @@ fn process_stream_lms(
     u8_buffer: &[u8],
     streams: usize,
     bit_error_table: &HashMap<u32, u16>,
-    seen: &Arc<Mutex<HashMap<u32, Instant>>>  
+    seen: &Arc<Mutex<HashMap<u32, Instant>>>,
+    mu: f32
 ) -> Vec<Message> {
     let buffer: &[i16] = cast_slice(u8_buffer);
     let mut iq: Vec<Vec<Complex<f32>>> = Vec::new();
@@ -160,8 +142,6 @@ fn process_stream_lms(
 
     for x in 0..buffer.len() / mul - MODES_PREAMBLE_SAMPLES - MODES_LONG_MSG_SAMPLES {
         let mut w_lms = vec![Complex::new(0.0f32, 0.0f32); streams];
-
-        let mu = 0.5e-5f32;
 
         for i in 0..constants::MODES_PREAMBLE_SAMPLES {
             let soi_sample = soi[i];
@@ -233,15 +213,14 @@ fn main() {
     let args = Args::parse();
 
     let thread_count: u32 = args.thread_count;
-    let cycle_count: u32 = args.cycle_count;
 
     println!("Hello, world!");
 
-    println!("Using {} threads and {} cycles.", thread_count, cycle_count);
+    println!("Using {} threads.", thread_count);
 
     let server_addr = "127.0.0.1:7878";
 
-    let mut pipe_mgmt = PipeManagement::new(thread_count as usize, cycle_count as usize);
+    let mut pipe_mgmt = PipeManagement::new(thread_count as usize, 0);
 
     let mut rxs: Vec<Receiver<Vec<Message>>> = Vec::new();
     let mut txs: Vec<Sender<Vec<u8>>> = Vec::new();
@@ -313,13 +292,9 @@ fn main() {
 
                 let seen_thread = seen.clone();
 
-                let base_pipe_ndx: usize = x * cycle_count as usize;
-
                 thread::spawn(move || {
                     println!("spawned");
                     let bit_error_table = crc::modes_init_error_info();
-                    let mut pipe_theta: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
-                    let mut pipe_amps: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
 
                     loop {
                         let buffer = brx.recv().unwrap();
@@ -327,7 +302,8 @@ fn main() {
                             &buffer,
                             streams,
                             &bit_error_table,
-                            &seen_thread
+                            &seen_thread,
+                            args.mu
                         );
                         btx.send(messages).unwrap();
                     }
@@ -336,41 +312,6 @@ fn main() {
 
 
             let mut buffer: Vec<u8> = vec![0; MODES_LONG_MSG_SAMPLES * 1024 * (streams * 4)];
-
-            // This sets up the pipes for uniform linear array (ULA) mode. It consumes all of the pipes
-            // currently so there won't be any left to try to track airplanes.
-            match args.ula_spacing_wavelength {
-                None => (),
-                Some(spacing) => {
-                    // `spacing` is the distance of each element from the other element in wavelengths
-                    let total_pipes = thread_count * cycle_count;
-
-                    // We are going to map -PI/2 to PI/2 to the total pipes.
-                    let slice = PI / (total_pipes as f32 - 1.0);
-
-                    for n in 0..total_pipes {
-                        let theta = slice * n as f32 - PI * 0.5f32;
-                        
-                        let mut thetas: Vec<f32> = Vec::with_capacity(streams - 1);
-
-                        // The first theta is always zero so we don't even calculate it. Also,
-                        // the code that uses these thetas already expects the first element to
-                        // have a theta of zero so we only need to pass minus one the number of
-                        // thetas.
-                        for element_index in 1..streams {
-                            // The conjugate of the phase difference. We have to reverse that]
-                            // phase different so they all recieve signals aligned in phase from
-                            // this direction `theta`.
-                            let shift = -spacing * PI * 2.0f32 * theta.sin() * element_index as f32;
-                            thetas.push(shift);
-                        }
-
-                        // This communicates with the threads using a global pipe index.
-                        pipe_mgmt.set_pipe_to_theta(n as usize, 0, Some(thetas), None);
-                    }
-                },
-            }
-
 
             println!("working with {} streams", streams);
 
@@ -386,8 +327,6 @@ fn main() {
                     if read == buffer.len() {
                         //println!("sending buffer to threads");
                         let start = Instant::now();
-
-                        let mut hm: HashMap<u64, Message> = HashMap::new();
                         
                         //pipe_mgmt.send_buffer_to_all(&buffer, streams);
                         
@@ -479,8 +418,8 @@ fn main() {
                             &mut entities,
                             sample_index,
                             &mut pipe_mgmt,
-                            args.snr_scaler,
-                            args.weighted_avg_depth
+                            1.0,
+                            1
                         );
 
                         if (Instant::now() - stat_start).as_secs() > 5 {
@@ -509,7 +448,7 @@ fn main() {
                             }
                             
                             println!(
-                                "ADDR   FLIGHT    ALT        LAT       LON      COUNT    INBEAM  STEERING VECTOR"
+                                "ADDR   FLIGHT    ALT        LAT       LON      COUNT"
                             );
 
                             for (addr, ent) in entities.iter() {
@@ -519,16 +458,13 @@ fn main() {
                                 };
 
                                 println!(
-                                    "{:6x} {:>8} {:>8.1} {:>10.4} {:>10.4} {:0>7} {:>7} {:?}",
+                                    "{:6x} {:>8} {:>8.1} {:>10.4} {:>10.4} {:0>7}",
                                     addr,
                                     flight,
                                     ent.alt.unwrap_or(0.0),
                                     ent.lat.unwrap_or(0.0),
                                     ent.lon.unwrap_or(0.0),
                                     ent.message_count,
-                                    // How many messages were picked from the calculated steering vector.
-                                    ent.inbeam,
-                                    ent.theta_avg(args.snr_scaler)
                                 );
                             }
 
