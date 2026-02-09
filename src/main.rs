@@ -133,7 +133,9 @@ fn process_stream_lms(
         }
     }
 
+    // The preamble in bits.
     let soi_bits = vec![1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0];
+    // The preamble as a sequence of complex numbers centered on DC with a phase of zero.
     let mut soi: Vec<Complex<f32>> = Vec::new();
     for x in 0..soi_bits.len() {
         soi.push(Complex::new(soi_bits[x] as f32, 0.0));
@@ -148,12 +150,16 @@ fn process_stream_lms(
             let soi_sample = soi[i];
             let mut sum = Complex::new(0.0f32, 0.0f32);
             
+            // Apply the weights and get the result. Do the beamforming operation.
             for y in 0..streams {
                 sum += w_lms[y].conj() * iq[y][x + i];
             }
 
+            // Take the difference between what we were supposed to get and what we got.
             let error = soi_sample - sum;
             
+            // Apply the error to the original samples and apply part of that to the weights
+            // in an incremental fashion.
             for y in 0..streams {
                 w_lms[y] += mu * error.conj() * iq[y][x + i];
             }
@@ -162,12 +168,16 @@ fn process_stream_lms(
         for i in 0..constants::MODES_LONG_MSG_SAMPLES {
             let mut sum = Complex::new(0.0f32, 0.0f32);
             
+            // Apply the final weights we got to the sample stream one sample at a time.
             for y in 0..streams {
                 sum += w_lms[y].conj() * iq[y][x + constants::MODES_PREAMBLE_SAMPLES + i];
             }
 
+            // The output of the beamformer equation.
             samples[i] = sum.norm();
         }
+
+        // Process the samples as if they contain a message.
 
         let mut thebyte: u8 = 0;
         let mut msg: Vec<u8> = Vec::new();
