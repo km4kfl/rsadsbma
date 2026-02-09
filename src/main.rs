@@ -104,7 +104,7 @@ struct Args {
 
     /// The `mu` for the LMS beamformer.
     #[arg(short, long)]
-    #[clap(default_value_t = 0.5e-4f32)]
+    #[clap(default_value_t = 0.002)]
     mu: f32,
 
     /// If false we use the CRC to check for a message which consumes more CPU.
