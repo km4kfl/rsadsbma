@@ -104,3 +104,9 @@ a half wavelength spacing you could do `300e6 / 1090e6 * 0.5` which would give y
 at half a wavelength in meters. The `0.5` is the wavelength spacing argument for `--ula-spacing-wavelength`.
 
 This mode is in contrast to the default random mode where the antenna weights are randomly selected.
+
+# LMS Beamformer
+
+The `lms` branch contains the least mean squares beamformer. It uses the preamble of the ADS-B message to hone in on the weights. It also uses the CRC to throw away messages instead of the preamble. It offers reduced CPU usage and from testing the highest message counts.
+
+https://pysdr.org/content/doa.html
