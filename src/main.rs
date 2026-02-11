@@ -325,7 +325,6 @@ fn main() {
     match TcpStream::connect(server_addr) {
         Ok(mut stream) => {
             println!("connected");
-            // We are expecting TWO interleaved streams from TWO antennas.
             let mut read: usize = 0;
             
             let mut short_buffer = vec![0; 1];
