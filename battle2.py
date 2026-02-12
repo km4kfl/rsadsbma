@@ -220,7 +220,8 @@ def main():
             X = np.array([a, b, c, d])
 
             thetas = np.linspace(-np.pi * 0.5, np.pi * 0.5, 600)
-
+            
+            '''
             # Do all four streams. Random probing.
             m = {}
             for _ in range(600):
@@ -259,12 +260,18 @@ def main():
                     if ndx not in m:
                         m[ndx] = snr
                         got_b += 1
+            '''
 
-            for snr, msg, ndx in demod_all(a, bit_error_table):
+            # Just do one stream. A single antenna.
+            m = {}
+            for snr, msg, ndx in demod_all(np.abs(a), bit_error_table):
+                print(ndx)
                 if ndx not in m:
                     m[ndx] = snr
                     got_c += 1
+                    exit()
 
+            '''
             # The spacing is in wavelengths.
             spacing = 0.4
             # -spacing * PI * 2.0f32 * theta.sin() * element_index as f32;
@@ -326,7 +333,7 @@ def main():
                             got_f += 1
                     else:
                         got_f += 1                        
-
+            '''
             print('LMS', got_f, '4x-random', got_a, '4x-random-amp', got_e, '4x-ula-sweep', got_d, '2x', got_b, '1x', got_c, 'read', read / 16.0 / 2e6)
 
 if __name__ == '__main__':

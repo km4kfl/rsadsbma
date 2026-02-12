@@ -24,6 +24,7 @@ use std::io::prelude::*;
 use std::f32::consts::PI;
 use bytemuck::cast_slice;
 use num::complex::Complex;
+use nalgebra as na;
 
 mod crc;
 mod constants;
@@ -94,38 +95,37 @@ struct Args {
     #[arg(short, long)]
     thread_count: u32,
 
-    /// A file prefix to write messages.
+    /// A file to write messages to.
     #[arg(short, long)]
     file_output: Option<String>,
+
+    /// A file to read samples from.
+    #[arg(short, long)]
+    file_input: String,
 
     /// TCP address to output raw messages to.
     #[arg(short, long)]
     net_raw_out: Option<String>,
-
-    /// The `mu` for the LMS beamformer.
-    #[arg(short, long)]
-    #[clap(default_value_t = 0.002)]
-    mu: f32,
-
-    /// If false we use the CRC to check for a message which consumes more CPU.
-    #[arg(short, long)]
-    #[clap(default_value_t = false)]
-    check_preamble: bool,
 }
 
 use stream::ProcessStreamResult;
 
-fn process_stream_lms(
+fn cft(theta: f64) -> Complex<f64> {
+    Complex::new(theta.cos(), theta.sin())
+}
+
+fn process_stream_lcmv(
     u8_buffer: &[u8],
     streams: usize,
     bit_error_table: &HashMap<u32, u16>,
-    seen: &Arc<Mutex<HashMap<u32, Instant>>>,
-    mu: f32,
-    check_preamble: bool
+    seen: &Arc<Mutex<HashMap<u32, Instant>>>
 ) -> Vec<Message> {
+    if streams != 4 {
+        panic!("Exactly four streams are supported for process_stream_lcmv.")
+    }
+
     let buffer: &[i16] = cast_slice(u8_buffer);
-    let mut iq: Vec<Vec<Complex<f32>>> = Vec::new();
-    let mut messages: Vec<Message> = Vec::new();
+    let mut iq: Vec<Vec<Complex<f64>>> = Vec::new();
 
     for x in 0..streams {
         iq.push(Vec::new());
@@ -135,131 +135,180 @@ fn process_stream_lms(
     for x in 0..buffer.len() / mul {
         let chunk = &buffer[x * mul..x * mul + mul];
         for y in 0..streams {
-            iq[y].push(Complex::new(chunk[y * 2 + 0] as f32 / 2049.0, chunk[y * 2 + 1] as f32 / 2049.0));
+            iq[y].push(Complex::new(chunk[y * 2 + 0] as f64 / 2049.0, chunk[y * 2 + 1] as f64 / 2049.0));
         }
     }
 
-    // The preamble in bits.
-    let soi_bits = vec![1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0];
-    // The preamble as a sequence of complex numbers centered on DC with a phase of zero.
-    let mut soi: Vec<Complex<f32>> = Vec::new();
-    for x in 0..soi_bits.len() {
-        soi.push(Complex::new(soi_bits[x] as f32, 0.0));
+    let mut cov: Vec<Complex<f64>> = Vec::new();
+
+    for x in 0..4 {
+        for y in 0..4 {
+            let mut sum = Complex::new(0.0f64, 0.0f64);
+            for z in 0..iq[x].len() {
+                sum += iq[x][z] * iq[y][z].conj();
+            }
+            cov.push(sum / iq[x].len() as f64);
+        }
     }
 
-    // The samples for the message content. No preamble.
-    let mut samples: Vec<f32> = vec![0.0f32; MODES_LONG_MSG_SAMPLES];
-    // The preamble.
-    let mut p: Vec<f32> = vec![0.0f32; MODES_PREAMBLE_SAMPLES];
+    let R = na::Matrix4::new(
+        cov[0],  cov[1],  cov[2],  cov[3],
+        cov[4],  cov[5],  cov[6],  cov[7],
+        cov[8],  cov[9],  cov[10], cov[11],
+        cov[12], cov[13], cov[14], cov[15]
+    ); 
+    
+    let R_inv = R.try_inverse().unwrap();
 
-    for x in 0..buffer.len() / mul - MODES_PREAMBLE_SAMPLES - MODES_LONG_MSG_SAMPLES {
-        let mut w_lms = vec![Complex::new(0.0f32, 0.0f32); streams];
+    let slice_count = 300;
+    let pi = std::f64::consts::PI;
 
-        for i in 0..constants::MODES_PREAMBLE_SAMPLES {
-            let soi_sample = soi[i];
-            let mut sum = Complex::new(0.0f32, 0.0f32);
+    let theta_slice = pi / (slice_count as f64 - 1.0f64);
+    
+    let d = 0.4f64;
+
+    let mut messages: Vec<Message> = Vec::new();
+    let mut hm: HashMap<usize, Message> = HashMap::new();
+
+    for lobe_ndx in 0..slice_count {
+        let lobe_theta = lobe_ndx as f64 * theta_slice - pi * 0.5;
+        for null_ndx in 0..slice_count {
+            let null_theta = null_ndx as f64 * theta_slice - pi * 0.5;
+
+            let C = na::Matrix4x2::new(
+                cft(2.0f64 * pi * d * 0.0 * lobe_theta.sin()),
+                cft(2.0f64 * pi * d * 0.0 * null_theta.sin()),
+
+                cft(2.0f64 * pi * d * 1.0 * lobe_theta.sin()),
+                cft(2.0f64 * pi * d * 1.0 * null_theta.sin()),
+
+                cft(2.0f64 * pi * d * 2.0 * lobe_theta.sin()),
+                cft(2.0f64 * pi * d * 2.0 * null_theta.sin()),
+
+                cft(2.0f64 * pi * d * 3.0 * lobe_theta.sin()),
+                cft(2.0f64 * pi * d * 3.0 * null_theta.sin())
+            );
             
-            // Apply the weights and get the result. Do the beamforming operation.
-            for y in 0..streams {
-                sum += w_lms[y].conj() * iq[y][x + i];
+            let f = na::Matrix2x1::new(Complex::new(1.0, 0.0), Complex::new(0.0, 0.0));
+
+            //         2x4         4x4     4x2
+            //let q = (C.adjoint() * R_inv * C).try_inverse().unwrap();  
+
+            let inner = match (C.adjoint() * R_inv * C).try_inverse() {
+                Some(v) => v,
+                None => {
+                    // np.linalg.pinv needed...
+                    continue;
+                },
+            };        
+
+            let w = R_inv * C * inner * f;
+
+            let wx = w[(0, 0)].conj();
+            let wy = w[(1, 0)].conj();
+            let wz = w[(2, 0)].conj();
+            let ww = w[(3, 0)].conj();
+
+            let a = &iq[0];
+            let b = &iq[1];
+            let c = &iq[2];
+            let d = &iq[3];
+
+            let mut mag: Vec<f64> = Vec::with_capacity(a.len());
+
+            assert!(a.len() == b.len());
+            assert!(a.len() == c.len());
+            assert!(a.len() == d.len());
+
+            for x in 0..a.len() {
+                let sample = a[x] * wx + b[x] * wy + c[x] * wz + d[x] * ww;
+                //let sample = a[x]; // + b[x] + c[x] + d[x];
+                mag.push((sample.re * sample.re + sample.im * sample.im).sqrt());
             }
 
-            // Take the difference between what we were supposed to get and what we got.
-            let error = soi_sample - sum;
-            
-            // Apply the error to the original samples and apply part of that to the weights
-            // in an incremental fashion.
-            for y in 0..streams {
-                w_lms[y] += mu * error.conj() * iq[y][x + i];
-            }
-        }
-
-        let snr: f32;
-
-        if check_preamble {
-            for i in 0..constants::MODES_PREAMBLE_SAMPLES {
-                let mut sum = Complex::new(0.0f32, 0.0f32);
-                
-                // Apply the final weights we got to the sample stream one sample at a time.
-                for y in 0..streams {
-                    sum += w_lms[y].conj() * iq[y][x + i];
+            for x in 0..mag.len() - constants::MODES_PREAMBLE_SAMPLES - constants::MODES_LONG_MSG_SAMPLES {
+                let p = &mag[x..x + constants::MODES_PREAMBLE_SAMPLES];
+                let valid: bool = (p[0] > p[1]) && (p[1] < p[2]) && (p[2] > p[3]) && (p[3] < p[0]) && 
+                                (p[4] < p[0]) && (p[5] < p[0]) && (p[6] < p[0]) && (p[7] > p[8]) &&
+                                (p[8] < p[9]) && (p[9] > p[6]);
+                if !valid {
+                    continue;
                 }
 
-                p[i] = sum.norm();
+                let high = (p[0] + p[2] + p[7] + p[9]) / 6.0f64;
+
+                if (p[4] >= high) || (p[5] >= high) {
+                    continue;
+                }
+
+                if (p[11] > high) || (p[12] > high) || (p[13] > high) || (p[14] > high) {
+                    continue;
+                }
+
+                let snr = (p[0] - p[1]) + (p[2] - p[3]) + (p[7] - p[6]) + (p[9] - p[8]);
+
+                let samples = &mag[x + constants::MODES_PREAMBLE_SAMPLES..x + constants::MODES_PREAMBLE_SAMPLES + constants::MODES_LONG_MSG_SAMPLES];
+
+                let mut thebyte: u8 = 0;
+                let mut msg: Vec<u8> = Vec::new();
+
+                for y in 0..samples.len() / 2 {
+                    let a = samples[y * 2 + 0];
+                    let b = samples[y * 2 + 1];
+
+                    if a > b {
+                        thebyte |= 1;
+                    }
+
+                    if y & 7 == 7 {
+                        msg.push(thebyte);
+                    }
+
+                    thebyte = thebyte << 1;            
+                }
+
+                match decode::process_result(
+                    ProcessStreamResult {
+                        snr: snr as f32,
+                        msg: msg,
+                        samples: Vec::new(),
+                        ndx: x,
+                        thetas: Vec::new(),
+                        amplitudes: Vec::new(),
+                        pipe_ndx: 0,
+                    },
+                    bit_error_table,
+                    seen
+                ) {
+                    Ok(message) => {
+                        match hm.get(&x) {
+                            None => {
+                                println!("message");
+                                hm.insert(x, message);
+                            },
+                            Some(om) => {
+                                if om.common.snr < message.common.snr {
+                                    hm.insert(x, message);
+                                }
+                            },
+                        }
+                    },
+                    Err(v) => (),
+                }
             }
-
-            let valid: bool = (p[0] > p[1]) && (p[1] < p[2]) && (p[2] > p[3]) && (p[3] < p[0]) && 
-                            (p[4] < p[0]) && (p[5] < p[0]) && (p[6] < p[0]) && (p[7] > p[8]) &&
-                            (p[8] < p[9]) && (p[9] > p[6]);
-            if !valid {
-                continue;
-            }
-
-            let high: f32 = (p[0] + p[2] + p[7] + p[9]) / 6.0f32;
-
-            if (p[4] >= high) || (p[5] >= high) {
-                continue;
-            }
-
-            if (p[11] > high) || (p[12] > high) || (p[13] > high) || (p[14] > high) {
-                continue;
-            }
-
-            snr = (p[0] - p[1]) + (p[2] - p[3]) + (p[7] - p[6]) + (p[9] - p[8]);            
-        } else {
-            snr = 0.0;
         }
+    }
 
-        for i in 0..constants::MODES_LONG_MSG_SAMPLES {
-            let mut sum = Complex::new(0.0f32, 0.0f32);
-            
-            // Apply the final weights we got to the sample stream one sample at a time.
-            for y in 0..streams {
-                sum += w_lms[y].conj() * iq[y][x + constants::MODES_PREAMBLE_SAMPLES + i];
-            }
+    //let s1 = na::Matrix4x1::new(Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0));
+    //let C = na::Matrix4x2::new(Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0));
+    //let R_inv = na::Matrix4::new(Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0), Complex::new(1.0, 1.0));
+    //let inner = na::Matrix2::new(1.0, 1.0, 1.0, 1.0);
+    //let f = na::Matrix2x1::new(Complex::new(1.0, 0.0), Complex::new(0.0, 0.0));
 
-            // The output of the beamformer equation.
-            samples[i] = sum.norm();
-        }
+    // conjugate-transpose
 
-        // Process the samples as if they contain a message.
-
-        let mut thebyte: u8 = 0;
-        let mut msg: Vec<u8> = Vec::new();
-
-        for y in 0..samples.len() / 2 {
-            let a: f32 = samples[y * 2 + 0];
-            let b: f32 = samples[y * 2 + 1];
-
-            if a > b {
-                thebyte |= 1;
-            }
-
-            if y & 7 == 7 {
-                msg.push(thebyte);
-            }
-
-            thebyte = thebyte << 1;            
-        }
-
-        match decode::process_result(
-            ProcessStreamResult {
-                snr: snr,
-                msg: msg,
-                samples: Vec::new(),
-                ndx: x,
-                thetas: Vec::new(),
-                amplitudes: Vec::new(),
-                pipe_ndx: 0,
-            },
-            bit_error_table,
-            seen
-        ) {
-            Ok(message) => {
-                messages.push(message);
-            },
-            Err(_) => (),
-        }
+    for (ndx, message) in hm.into_iter() {
+        messages.push(message);
     }
 
     messages
@@ -322,247 +371,33 @@ fn main() {
         },
     };
 
-    match TcpStream::connect(server_addr) {
-        Ok(mut stream) => {
-            println!("connected");
-            let mut read: usize = 0;
-            
-            let mut short_buffer = vec![0; 1];
-            // Read the number of streams.
-            let streams = match stream.read(&mut short_buffer[0..1]) {
-                Ok(bytes_read) if bytes_read > 0 => {
-                    short_buffer[0] as usize
-                },
-                Ok(_) => {
-                    panic!("Sample stream TCP connection returned zero bytes.");
-                },
-                Err(e) => {
-                    panic!("Error: {}", e);
-                }
-            };
-
-            for x in 0..thread_count as usize {
-                let (atx, brx) = channel();
-                let (btx, arx) = channel();
-                txs.push(atx);
-                rxs.push(arx);
-
-                let seen_thread = seen.clone();
-
-                thread::spawn(move || {
-                    println!("spawned");
-                    let bit_error_table = crc::modes_init_error_info();
-
-                    loop {
-                        let buffer = brx.recv().unwrap();
-                        let messages = process_stream_lms(
-                            &buffer,
-                            streams,
-                            &bit_error_table,
-                            &seen_thread,
-                            args.mu,
-                            args.check_preamble
-                        );
-                        btx.send(messages).unwrap();
-                    }
-                });
-            }
-
-
-            let mut buffer: Vec<u8> = vec![0; MODES_LONG_MSG_SAMPLES * 1024 * (streams * 4)];
-
-            println!("working with {} streams", streams);
-
-            let sps: f64 = 2e6f64;
-            let buffer_time: f64 = buffer.len() as f64 / (streams as f64 * 4.0f64) /  sps;
-            println!("reading stream");
-            // TODO: Take the tail end of the buffer and prefix it to the
-            // next buffer incase a message is across the two buffers.
-            while match stream.read(&mut buffer[read..]) {
-                Ok(bytes_read) if bytes_read > 0 => {
-                    read += bytes_read;
-                    //println!("read bytes {}", bytes_read);
-                    if read == buffer.len() {
-                        //println!("sending buffer to threads");
-                        let start = Instant::now();
-                        
-                        //pipe_mgmt.send_buffer_to_all(&buffer, streams);
-                        
-                        let bytes_per_strip = 4 * streams;
-                        let sample_count = buffer.len() / bytes_per_strip;
-                        let chunk_size: usize = sample_count / thread_count as usize;
-                        let rem: usize = sample_count % thread_count as usize;
-                        
-                        for i in 0..thread_count as usize - 1 {
-                            let chunk_slice: &[u8] = &buffer[i * chunk_size * bytes_per_strip..(i * chunk_size + chunk_size + MODES_LONG_MSG_SAMPLES) * bytes_per_strip];
-                            let chunk: Vec<u8> = chunk_slice.to_vec();
-                            txs[i].send(chunk).unwrap();
-                        }
-
-                        let i = thread_count as usize - 1;
-                        let chunk_slice = &buffer[i * chunk_size * bytes_per_strip..(i * chunk_size + chunk_size + rem) * bytes_per_strip];
-                        let chunk: Vec<u8> = chunk_slice.to_vec();
-                        txs[i].send(chunk).unwrap();
-
-                        let mut messages: Vec<Message> = Vec::new();
-
-                        for i in 0..thread_count as usize {
-                            let msgs = rxs[i].recv().unwrap();
-                            for mut msg in msgs {
-                                msg.common.ndx += sample_index;
-                                messages.push(msg);
-                            }
-                        }
-
-                        //let messages = process_stream_lms(
-                        //    &buffer,
-                        //    streams,
-                        //    &bit_error_table,
-                        //    &seen
-                        //);
-
-                        for message in &messages {
-                            match message.specific {
-                                MessageSpecific::AircraftIdenAndCat { .. } => stat_aiac += 1,
-                                MessageSpecific::SurfacePositionMessage { .. } => stat_spm += 1,
-                                MessageSpecific::AirbornePositionMessage { .. } => stat_apm += 1,
-                                MessageSpecific::AirborneVelocityMessage { .. } => stat_avm += 1,
-                                MessageSpecific::AirborneVelocityMessageShort { .. } => stat_avms += 1,
-                                _ => (),
-                            }
-
-                            // This is used to send the raw data in HEX format over a socket. The
-                            // primary use case for this is when providing the argument --net-raw-out
-                            // for a dump1090 instance running in --net-only mode so you can have a
-                            // webpage map of the aircraft.
-                            match net_raw_out_stream {
-                                None => (),
-                                Some(ref mut stream) => {
-                                    let msg = message.common.msg.clone();
-                                    let hex_string: String = msg.iter().map(
-                                        |byte| format!("{:02X}", byte)
-                                    ).collect();
-                                    let line = format!("*{};\n", hex_string);
-                                    if line.is_ascii() {
-                                        let ascii_bytes = line.as_bytes();
-                                        stream.write(ascii_bytes).unwrap();
-                                    }
-                                },
-                            }
-
-                            // This is used when the --file-output argument is specified. It writes the
-                            // raw messages and associated data to a file in a serialized format. See
-                            // the function `write_message_to_file` for a detailed overview of the
-                            // format used.
-                            match message.specific {
-                                MessageSpecific::Other => (),
-                                _ => {
-                                    match &mut file {
-                                        None => (),
-                                        Some(file) => {
-                                            write_message_to_file(file, &message);
-                                        },
-                                    }
-                                },
-                            }                            
-                        }
-
-                        let items = messages.into_iter().map(|x| (x.common.ndx, x)).collect();
-
-                        // The message have been demodulated and decoded. Process them to produce
-                        // an aircraft entity with attached information. This also computes a
-                        // steering vector to try to track the aircraft with the antenna system.
-                        entity::process_messages(
-                            items,
-                            &mut entities,
-                            sample_index,
-                            &mut pipe_mgmt,
-                            1.0,
-                            1
-                        );
-
-                        if (Instant::now() - stat_start).as_secs() > 5 {
-                            stat_start = Instant::now();
-                            let elapsed_dur: Duration = stat_gstart.elapsed();
-                            let elapsed = elapsed_dur.as_secs() as f64 + elapsed_dur.subsec_micros() as f64 / 1e6f64;
-                            println!("Type                          Total/PerSecond");
-                            println!("AircraftIdenAndCat            {}/{:.1}", stat_aiac, stat_aiac as f64 / elapsed);
-                            println!("SurfacePositionMessage        {}/{:.1}", stat_spm, stat_spm as f64 / elapsed);
-                            println!("AirbornePositionMessage       {}/{:.1}", stat_apm, stat_apm as f64 / elapsed);
-                            println!("AirborneVelocityMessage       {}/{:.1}", stat_avm, stat_avm as f64 / elapsed);
-                            println!("AirborneVelocityMessageShort  {}/{:.1}", stat_avms, stat_avms as f64 / elapsed);
-                            println!("====== AIRCRAFT ========");
-                            let keys: Vec<u32> = entities.keys().map(|x| *x).collect();
-                            for addr in keys {
-                                let last_update = entities.get(&addr).unwrap().last_update;
-                                let delta = sample_index - last_update;
-                                // If we have not heard from an entity in roughly 10 seconds then
-                                // remove it from the list and make sure to unset any pipe that
-                                // was assigned to it.
-                                if delta / 2_000_000u64 > 60 {
-                                    pipe_mgmt.unset_addr(addr);
-                                    entities.remove(&addr);
-                                    println!("removed addr {:6x}", addr);
-                                }
-                            }
-                            
-                            println!(
-                                "ADDR   FLIGHT    ALT        LAT       LON      COUNT"
-                            );
-
-                            for (addr, ent) in entities.iter() {
-                                let flight = match &ent.flight {
-                                    None => String::from(" "),
-                                    Some(v) => v.into_iter().collect::<String>(),
-                                };
-
-                                println!(
-                                    "{:6x} {:>8} {:>8.1} {:>10.4} {:>10.4} {:0>7}",
-                                    addr,
-                                    flight,
-                                    ent.alt.unwrap_or(0.0),
-                                    ent.lat.unwrap_or(0.0),
-                                    ent.lon.unwrap_or(0.0),
-                                    ent.message_count,
-                                );
-                            }
-
-                            println!("buffer-time-elapsed-average: {} buffer-time:{}", buffer_time_elapsed_avg, buffer_time);
-                        }
-                        
-                        {
-                            let elapsed_dur: Duration = start.elapsed();
-                            let cur_elapsed = elapsed_dur.as_secs() as f64 + elapsed_dur.subsec_micros() as f64 / 1e6f64;
-                            
-                            if buffer_time_elapsed_avg == 0.0 {
-                                buffer_time_elapsed_avg = cur_elapsed;
-                            } else {
-                                buffer_time_elapsed_avg = buffer_time_elapsed_avg * 0.9999 + cur_elapsed * 0.0001;
-                            }
-                            
-                            if cur_elapsed > buffer_time * 0.95 {
-                                println!("elapsed:{} buffer_time:{} TOO SLOW!!! ADD MORE THREADS!!!", cur_elapsed, buffer_time);
-                            }
-                        }
-
-                        sample_index += buffer.len() as u64 / (streams * 4) as u64;
-                        read = 0;
-                    }
-
-                    true
-                },
-                Ok(_) => false,
-                Err(e) => {
-                    eprintln!("error: {}", e);
-                    false
-                },
-            } {
-
-            }
-            
+    let mut fin = match File::open(args.file_input) {
+        Ok(file) => file,
+        Err(msg) => {
+            panic!("error opening file: {}", msg);
         },
-        Err(e) =>  {
-            eprintln!("failed to connect: {}", e);
+    };
+
+    let mut count = 0usize;
+    let mut read = 0.0f64;
+
+    loop {
+        let mut buf: Vec<u8> = vec![0; MODES_LONG_MSG_SAMPLES * 512 * (4 * 4)];
+
+        match fin.read_exact(&mut buf) {
+            Ok(_) => {
+                let messages = process_stream_lcmv(
+                    &buf,
+                    4,
+                    &bit_error_table,
+                    &seen
+                );
+
+                count += messages.len();
+                read += buf.len() as f64;
+                println!("count: {} read: {}", count, read / 16.0f64 / 2e6f64);
+            },
+            Err(..) => break,
         }
     }
 
