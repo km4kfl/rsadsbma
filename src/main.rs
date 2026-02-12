@@ -139,12 +139,12 @@ fn process_stream_lms(
         }
     }
 
-    // The preamble in bits.
-    let soi_bits = vec![1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0];
+    // The preamble in pulses.
+    let soi_pulses = vec![1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0];
     // The preamble as a sequence of complex numbers centered on DC with a phase of zero.
     let mut soi: Vec<Complex<f32>> = Vec::new();
-    for x in 0..soi_bits.len() {
-        soi.push(Complex::new(soi_bits[x] as f32, 0.0));
+    for x in 0..soi_pulses.len() {
+        soi.push(Complex::new(soi_pulses[x] as f32, 0.0));
     }
 
     // The samples for the message content. No preamble.
