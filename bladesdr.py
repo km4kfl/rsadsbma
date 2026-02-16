@@ -30,7 +30,7 @@ def main(args):
     dev.set_frequency(0, 1090000000 + args.freq_offset)
 
     tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_socket.bind(('localhost', 7878))
+    tcp_socket.bind(('0.0.0.0', 7878))
     tcp_socket.listen(1)
 
     while True:

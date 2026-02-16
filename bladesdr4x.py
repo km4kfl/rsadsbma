@@ -78,7 +78,7 @@ def main(args):
 
     if args.file_output is None:
         tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tcp_socket.bind(('localhost', 7878))
+        tcp_socket.bind(('0.0.0.0', 7878))
         tcp_socket.listen(1)
         connection, client = tcp_socket.accept()
     else:
