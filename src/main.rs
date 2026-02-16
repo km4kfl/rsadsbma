@@ -25,6 +25,7 @@ use std::f32::consts::PI;
 use bytemuck::cast_slice;
 use num::complex::Complex;
 use nalgebra as na;
+use rand::Rng;
 
 mod crc;
 mod constants;
@@ -96,11 +97,11 @@ struct Args {
     thread_count: u32,
 
     /// A file to write messages to.
-    #[arg(short, long)]
+    #[arg(long)]
     file_output: Option<String>,
 
     /// A file to read samples from.
-    #[arg(short, long)]
+    #[arg(long)]
     file_input: String,
 
     /// TCP address to output raw messages to.
@@ -160,141 +161,142 @@ fn process_stream_lcmv(
     
     let R_inv = R.try_inverse().unwrap();
 
-    let slice_count = 300;
+    let cycles = 1000;
     let pi = std::f64::consts::PI;
-
-    let theta_slice = pi / (slice_count as f64 - 1.0f64);
     
     let d = 0.4f64;
 
     let mut messages: Vec<Message> = Vec::new();
     let mut hm: HashMap<usize, Message> = HashMap::new();
 
-    for lobe_ndx in 0..slice_count {
-        let lobe_theta = lobe_ndx as f64 * theta_slice - pi * 0.5;
-        for null_ndx in 0..slice_count {
-            let null_theta = null_ndx as f64 * theta_slice - pi * 0.5;
+    let mut rng = rand::thread_rng();
 
-            let C = na::Matrix4x2::new(
-                cft(2.0f64 * pi * d * 0.0 * lobe_theta.sin()),
-                cft(2.0f64 * pi * d * 0.0 * null_theta.sin()),
+    for _ in 0..cycles {
+        let lobe_theta = rng.r#gen::<f64>() * pi - pi * 0.5;
+        let null_theta = rng.r#gen::<f64>() * pi - pi * 0.5;
 
-                cft(2.0f64 * pi * d * 1.0 * lobe_theta.sin()),
-                cft(2.0f64 * pi * d * 1.0 * null_theta.sin()),
+        let C = na::Matrix4x2::new(
+            cft(2.0f64 * pi * d * 0.0 * lobe_theta.sin()),
+            cft(2.0f64 * pi * d * 0.0 * null_theta.sin()),
 
-                cft(2.0f64 * pi * d * 2.0 * lobe_theta.sin()),
-                cft(2.0f64 * pi * d * 2.0 * null_theta.sin()),
+            cft(2.0f64 * pi * d * 1.0 * lobe_theta.sin()),
+            cft(2.0f64 * pi * d * 1.0 * null_theta.sin()),
 
-                cft(2.0f64 * pi * d * 3.0 * lobe_theta.sin()),
-                cft(2.0f64 * pi * d * 3.0 * null_theta.sin())
-            );
-            
-            let f = na::Matrix2x1::new(Complex::new(1.0, 0.0), Complex::new(0.0, 0.0));
+            cft(2.0f64 * pi * d * 2.0 * lobe_theta.sin()),
+            cft(2.0f64 * pi * d * 2.0 * null_theta.sin()),
 
-            //         2x4         4x4     4x2
-            //let q = (C.adjoint() * R_inv * C).try_inverse().unwrap();  
+            cft(2.0f64 * pi * d * 3.0 * lobe_theta.sin()),
+            cft(2.0f64 * pi * d * 3.0 * null_theta.sin())
+        );
+        
+        let f = na::Matrix2x1::new(Complex::new(1.0, 0.0), Complex::new(0.0, 0.0));
 
-            let inner = match (C.adjoint() * R_inv * C).try_inverse() {
-                Some(v) => v,
-                None => {
-                    // np.linalg.pinv needed...
-                    continue;
-                },
-            };        
+        //         2x4         4x4     4x2
+        //let q = (C.adjoint() * R_inv * C).try_inverse().unwrap();  
 
-            let w = R_inv * C * inner * f;
+        let inner = match (C.adjoint() * R_inv * C).try_inverse() {
+            Some(v) => v,
+            None => {
+                // np.linalg.pinv needed...
+                //panic!("np.lingalg.pinv needed");
+                continue;
+            },
+        };        
 
-            let wx = w[(0, 0)].conj();
-            let wy = w[(1, 0)].conj();
-            let wz = w[(2, 0)].conj();
-            let ww = w[(3, 0)].conj();
+        let w = R_inv * C * inner * f;
 
-            let a = &iq[0];
-            let b = &iq[1];
-            let c = &iq[2];
-            let d = &iq[3];
+        let mut wx = w[(0, 0)].conj();
+        let mut wy = w[(1, 0)].conj();
+        let mut wz = w[(2, 0)].conj();
+        let mut ww = w[(3, 0)].conj();
 
-            let mut mag: Vec<f64> = Vec::with_capacity(a.len());
+        let a = &iq[0];
+        let b = &iq[1];
+        let c = &iq[2];
+        let d = &iq[3];
 
-            assert!(a.len() == b.len());
-            assert!(a.len() == c.len());
-            assert!(a.len() == d.len());
+        let mut mag: Vec<f64> = Vec::with_capacity(a.len());
 
-            for x in 0..a.len() {
-                let sample = a[x] * wx + b[x] * wy + c[x] * wz + d[x] * ww;
-                //let sample = a[x]; // + b[x] + c[x] + d[x];
-                mag.push((sample.re * sample.re + sample.im * sample.im).sqrt());
+        assert!(a.len() == b.len());
+        assert!(a.len() == c.len());
+        assert!(a.len() == d.len());
+
+        for x in 0..a.len() {
+            let sample = a[x] * wx + b[x] * wy + c[x] * wz + d[x] * ww;
+            mag.push((sample.re * sample.re + sample.im * sample.im).sqrt());
+        }
+
+        for x in 0..mag.len() - constants::MODES_PREAMBLE_SAMPLES - constants::MODES_LONG_MSG_SAMPLES {
+            let p = &mag[x..x + constants::MODES_PREAMBLE_SAMPLES];
+            let valid: bool = (p[0] > p[1]) && (p[1] < p[2]) && (p[2] > p[3]) && (p[3] < p[0]) && 
+                            (p[4] < p[0]) && (p[5] < p[0]) && (p[6] < p[0]) && (p[7] > p[8]) &&
+                            (p[8] < p[9]) && (p[9] > p[6]);
+            if !valid {
+                continue;
             }
 
-            for x in 0..mag.len() - constants::MODES_PREAMBLE_SAMPLES - constants::MODES_LONG_MSG_SAMPLES {
-                let p = &mag[x..x + constants::MODES_PREAMBLE_SAMPLES];
-                let valid: bool = (p[0] > p[1]) && (p[1] < p[2]) && (p[2] > p[3]) && (p[3] < p[0]) && 
-                                (p[4] < p[0]) && (p[5] < p[0]) && (p[6] < p[0]) && (p[7] > p[8]) &&
-                                (p[8] < p[9]) && (p[9] > p[6]);
-                if !valid {
-                    continue;
+            let high = (p[0] + p[2] + p[7] + p[9]) / 6.0f64;
+
+            if (p[4] >= high) || (p[5] >= high) {
+                continue;
+            }
+
+            if (p[11] > high) || (p[12] > high) || (p[13] > high) || (p[14] > high) {
+                continue;
+            }
+
+            let snr = (p[0] - p[1]) + (p[2] - p[3]) + (p[7] - p[6]) + (p[9] - p[8]);
+
+            let samples = &mag[
+                x + constants::MODES_PREAMBLE_SAMPLES..
+                x + constants::MODES_PREAMBLE_SAMPLES + constants::MODES_LONG_MSG_SAMPLES
+            ];
+
+            let mut thebyte: u8 = 0;
+            let mut msg: Vec<u8> = Vec::new();
+
+            for y in 0..samples.len() / 2 {
+                let a = samples[y * 2 + 0];
+                let b = samples[y * 2 + 1];
+
+                if a > b {
+                    thebyte |= 1;
                 }
 
-                let high = (p[0] + p[2] + p[7] + p[9]) / 6.0f64;
-
-                if (p[4] >= high) || (p[5] >= high) {
-                    continue;
+                if y & 7 == 7 {
+                    msg.push(thebyte);
                 }
 
-                if (p[11] > high) || (p[12] > high) || (p[13] > high) || (p[14] > high) {
-                    continue;
-                }
+                thebyte = thebyte << 1;
+            }
 
-                let snr = (p[0] - p[1]) + (p[2] - p[3]) + (p[7] - p[6]) + (p[9] - p[8]);
-
-                let samples = &mag[x + constants::MODES_PREAMBLE_SAMPLES..x + constants::MODES_PREAMBLE_SAMPLES + constants::MODES_LONG_MSG_SAMPLES];
-
-                let mut thebyte: u8 = 0;
-                let mut msg: Vec<u8> = Vec::new();
-
-                for y in 0..samples.len() / 2 {
-                    let a = samples[y * 2 + 0];
-                    let b = samples[y * 2 + 1];
-
-                    if a > b {
-                        thebyte |= 1;
-                    }
-
-                    if y & 7 == 7 {
-                        msg.push(thebyte);
-                    }
-
-                    thebyte = thebyte << 1;            
-                }
-
-                match decode::process_result(
-                    ProcessStreamResult {
-                        snr: snr as f32,
-                        msg: msg,
-                        samples: Vec::new(),
-                        ndx: x,
-                        thetas: Vec::new(),
-                        amplitudes: Vec::new(),
-                        pipe_ndx: 0,
-                    },
-                    bit_error_table,
-                    seen
-                ) {
-                    Ok(message) => {
-                        match hm.get(&x) {
-                            None => {
-                                println!("message");
+            match decode::process_result(
+                ProcessStreamResult {
+                    snr: snr as f32,
+                    msg: msg,
+                    samples: Vec::new(),
+                    ndx: x,
+                    thetas: Vec::new(),
+                    amplitudes: Vec::new(),
+                    pipe_ndx: 0,
+                },
+                bit_error_table,
+                seen
+            ) {
+                Ok(message) => {
+                    match hm.get(&x) {
+                        None => {
+                            println!("message");
+                            hm.insert(x, message);
+                        },
+                        Some(om) => {
+                            if om.common.snr < message.common.snr {
                                 hm.insert(x, message);
-                            },
-                            Some(om) => {
-                                if om.common.snr < message.common.snr {
-                                    hm.insert(x, message);
-                                }
-                            },
-                        }
-                    },
-                    Err(v) => (),
-                }
+                            }
+                        },
+                    }
+                },
+                Err(v) => (),
             }
         }
     }
@@ -317,22 +319,9 @@ fn process_stream_lcmv(
 fn main() {
     let args = Args::parse();
 
-    let thread_count: u32 = args.thread_count;
-
     println!("Hello, world!");
 
-    println!("Using {} threads.", thread_count);
-
-    let server_addr = "127.0.0.1:7878";
-
-    let mut pipe_mgmt = PipeManagement::new(thread_count as usize, 0);
-
-    let mut rxs: Vec<Receiver<Vec<Message>>> = Vec::new();
-    let mut txs: Vec<Sender<Vec<u8>>> = Vec::new();
-
     let seen: Arc<Mutex<HashMap<u32, Instant>>> = Arc::new(Mutex::new(HashMap::new()));
-
-    let bit_error_table = crc::modes_init_error_info();
 
     let bit_error_table = crc::modes_init_error_info();
 
@@ -344,18 +333,6 @@ fn main() {
     };
 
     let mut entities: HashMap<u32, Entity> = HashMap::new();
-
-    let mut sample_index: u64 = 0;
-
-    let mut buffer_time_elapsed_avg = 0.0f64;
-
-    let mut stat_aiac: u64 = 0;
-    let mut stat_spm: u64 = 0;
-    let mut stat_apm: u64 = 0;
-    let mut stat_avm: u64 = 0;
-    let mut stat_avms: u64 = 0;
-    let mut stat_start = Instant::now();
-    let stat_gstart = Instant::now();
 
     let mut net_raw_out_stream: Option<TcpStream> = match args.net_raw_out {
         None => None,
