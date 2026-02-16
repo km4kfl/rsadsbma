@@ -92,21 +92,9 @@ fn write_message_to_file(file: &mut File, m: &Message) {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Number of threads to use.
-    #[arg(short, long)]
-    thread_count: u32,
-
-    /// A file to write messages to.
-    #[arg(long)]
-    file_output: Option<String>,
-
     /// A file to read samples from.
     #[arg(long)]
     file_input: String,
-
-    /// TCP address to output raw messages to.
-    #[arg(short, long)]
-    net_raw_out: Option<String>,
 }
 
 use stream::ProcessStreamResult;
@@ -325,28 +313,7 @@ fn main() {
 
     let bit_error_table = crc::modes_init_error_info();
 
-    let mut file = match args.file_output {
-        Some(v) => {
-            Some(File::create(v).unwrap())
-        },
-        None => None,
-    };
-
     let mut entities: HashMap<u32, Entity> = HashMap::new();
-
-    let mut net_raw_out_stream: Option<TcpStream> = match args.net_raw_out {
-        None => None,
-        Some(addr) => match TcpStream::connect(addr.clone()) {
-            Ok(stream) => {
-                println!("connected to --net-raw-out {}", addr);
-                Some(stream)
-            },
-            Err(e) => {
-                println!("{}", e);
-                panic!("failed to connect to --net-raw-out")
-            },
-        },
-    };
 
     let mut fin = match File::open(args.file_input) {
         Ok(file) => file,
