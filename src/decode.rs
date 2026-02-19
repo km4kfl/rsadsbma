@@ -111,6 +111,8 @@ pub enum MessageSpecific {
         hdr: DfHeader1,
         heading: f32,
     },
+    MilitaryExtendedSquitter,
+    MilitaryUse,
     Other,
 }
 
@@ -265,6 +267,14 @@ pub fn process_result(
     };
 
     match msgtype {
+        19 => Ok(Message {
+            common: common,
+            specific: MessageSpecific::MilitaryExtendedSquitter,
+        }),
+        22 => Ok(Message {
+            common: common,
+            specific: MessageSpecific::MilitaryUse,
+        }),
         17 | 18 => {
             let hdr = DfHeader1 {
                 capability: ca,

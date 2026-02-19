@@ -268,6 +268,8 @@ fn main() {
     let mut stat_apm: u64 = 0;
     let mut stat_avm: u64 = 0;
     let mut stat_avms: u64 = 0;
+    let mut stat_mes: u64 = 0;
+    let mut stat_mu: u64 = 0;
     let mut stat_start = Instant::now();
     let stat_gstart = Instant::now();
 
@@ -423,6 +425,8 @@ fn main() {
                         MessageSpecific::AirbornePositionMessage { .. } => stat_apm += 1,
                         MessageSpecific::AirborneVelocityMessage { .. } => stat_avm += 1,
                         MessageSpecific::AirborneVelocityMessageShort { .. } => stat_avms += 1,
+                        MessageSpecific::MilitaryExtendedSquitter { .. } => stat_mes += 1,
+                        MessageSpecific::MilitaryUse { .. } => stat_mu += 1,
                         _ => (),
                     }
 
@@ -484,6 +488,8 @@ fn main() {
                     println!("AirbornePositionMessage       {}/{:.1}", stat_apm, stat_apm as f64 / elapsed);
                     println!("AirborneVelocityMessage       {}/{:.1}", stat_avm, stat_avm as f64 / elapsed);
                     println!("AirborneVelocityMessageShort  {}/{:.1}", stat_avms, stat_avms as f64 / elapsed);
+                    println!("MilitaryExtendedSquitter      {}/{:.1}", stat_mes, stat_mes as f64 / elapsed);
+                    println!("MilitaryUse                   {}/{:.1}", stat_mu, stat_mu as f64 / elapsed);
                     println!("====== AIRCRAFT ========");
                     let keys: Vec<u32> = entities.keys().map(|x| *x).collect();
                     for addr in keys {
