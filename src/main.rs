@@ -296,7 +296,7 @@ fn main() {
             Some(_) => match InputMultiplexor::from_socket(&input_source) {
                 Ok(v) => v,
                 Err(msg) => panic!("error opening socket: {}", msg),
-            }
+            },
             None => match InputMultiplexor::from_open(&input_source) {
                 Ok(v) => v,
                 Err(msg) => panic!("error opening file: {}", msg),
@@ -488,8 +488,8 @@ fn main() {
                     println!("AirbornePositionMessage       {}/{:.1}", stat_apm, stat_apm as f64 / elapsed);
                     println!("AirborneVelocityMessage       {}/{:.1}", stat_avm, stat_avm as f64 / elapsed);
                     println!("AirborneVelocityMessageShort  {}/{:.1}", stat_avms, stat_avms as f64 / elapsed);
-                    println!("MilitaryExtendedSquitter      {}/{:.1}", stat_mes, stat_mes as f64 / elapsed);
-                    println!("MilitaryUse                   {}/{:.1}", stat_mu, stat_mu as f64 / elapsed);
+                    //println!("MilitaryExtendedSquitter      {}/{:.1}", stat_mes, stat_mes as f64 / elapsed);
+                    //println!("MilitaryUse                   {}/{:.1}", stat_mu, stat_mu as f64 / elapsed);
                     println!("====== AIRCRAFT ========");
                     let keys: Vec<u32> = entities.keys().map(|x| *x).collect();
                     for addr in keys {

@@ -135,7 +135,7 @@ pub enum ThreadTxMessage {
     /// The first argument is the buffer. The second is the number
     /// of streams contained in the buffer.
     Buffer(Vec<u8>, usize),
-    /// Used to set a theta to a constant value for a single pipe.
+    /// Used to set a theta to a constant value for a single pipe and optionally the amplitude.
     SetWeights(usize, Vec<f32>, Option<Vec<f32>>),
     /// Used to revert a pipe back to a value that is randomly choosen per buffer process operation.
     UnsetWeights(usize),
