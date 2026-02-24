@@ -438,6 +438,7 @@ fn main() {
                             args.check_preamble
                         )).unwrap();
                     },
+                    ThreadTxMessage::Exit => break,
                 }
             }
         });
@@ -796,6 +797,8 @@ fn main() {
     } {
 
     }
+
+    pipe_mgmt.tell_threads_to_exit();
 
     println!("exiting");
 }

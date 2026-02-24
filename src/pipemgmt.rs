@@ -130,6 +130,12 @@ impl PipeManagement {
     pub fn push_tx(&mut self, sender: Sender<ThreadTxMessage>) {
         self.txs.push(sender);
     }
+
+    pub fn tell_threads_to_exit(&self) {
+        for tx in &self.txs {
+            tx.send(ThreadTxMessage::Exit).unwrap();
+        }
+    }
 }
 
 /// A collection of messages each thread understands.
@@ -145,4 +151,6 @@ pub enum ThreadTxMessage {
     UnsetWeights(usize),
     /// Used to send work for the LMS beamformer.
     LMSWork(Vec<u8>, usize),
+    // Instructs thread to exit.
+    Exit,
 }
