@@ -778,7 +778,7 @@ fn main() {
                 sample_index += buffer.len() as u64 / (streams * 4) as u64;
                 // Copy tail end of the buffer back to the start to catch messages at end or crossing the boundary between buffers.
                 {
-                    let sz = (constants::MODES_PREAMBLE_SAMPLES + constants::MODES_LONG_MSG_SAMPLES - 1) * 2 * streams;
+                    let sz = (constants::MODES_PREAMBLE_SAMPLES + constants::MODES_LONG_MSG_SAMPLES - 1) * 4 * streams;
                     for x in 0..sz {
                         buffer[x] = buffer[buffer.len() - sz + x];
                     }
