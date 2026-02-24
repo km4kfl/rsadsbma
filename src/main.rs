@@ -92,9 +92,9 @@ struct Args {
     #[arg(short, long)]
     thread_count: u32,
 
-    /// Number of cycles per thread.
+    /// Number of cycles per thread. If not specified uses LMS beamformer instead of random.
     #[arg(short, long)]
-    cycle_count: u32,
+    cycle_count: Option<u32>,
 
     /// Either a file path or a TCP/IP "address:port". Defaults to "localhost:7878".
     #[arg(long)]
@@ -130,6 +130,16 @@ struct Args {
     #[arg(short, long)]
     #[clap(default_value_t = false)]
     randomize_amplitudes: bool,
+
+    /// The `mu` for the LMS beamformer.
+    #[arg(short, long)]
+    #[clap(default_value_t = 0.002)]
+    mu: f32,
+
+    /// By default don't check the preamble for the LMS beamformer.
+    #[arg(short, long)]
+    #[clap(default_value_t = false)]
+    check_preamble: bool,
 }
 
 /// Supports `InputMultiplexor`.
@@ -189,15 +199,185 @@ impl InputMultiplexor {
     }
 }
 
+use stream::ProcessStreamResult;
+use num::complex::Complex;
+use bytemuck::cast_slice;
+
+fn process_stream_lms(
+    u8_buffer: &[u8],
+    streams: usize,
+    bit_error_table: &HashMap<u32, u16>,
+    seen: &Arc<Mutex<HashMap<u32, Instant>>>,
+    mu: f32,
+    check_preamble: bool
+) -> Vec<Message> {
+    let buffer: &[i16] = cast_slice(u8_buffer);
+    let mut iq: Vec<Vec<Complex<f32>>> = Vec::new();
+    let mut messages: Vec<Message> = Vec::new();
+
+    for x in 0..streams {
+        iq.push(Vec::new());
+    }
+
+    let mul = streams * 2;
+    for x in 0..buffer.len() / mul {
+        let chunk = &buffer[x * mul..x * mul + mul];
+        for y in 0..streams {
+            iq[y].push(Complex::new(chunk[y * 2 + 0] as f32 / 2049.0, chunk[y * 2 + 1] as f32 / 2049.0));
+        }
+    }
+
+    // The preamble in pulses.
+    let soi_pulses = vec![1, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0];
+    // The preamble as a sequence of complex numbers centered on DC with a phase of zero.
+    let mut soi: Vec<Complex<f32>> = Vec::new();
+    for x in 0..soi_pulses.len() {
+        soi.push(Complex::new(soi_pulses[x] as f32, 0.0));
+    }
+
+    // The samples for the message content. No preamble.
+    let mut samples: Vec<f32> = vec![0.0f32; MODES_LONG_MSG_SAMPLES];
+    // The preamble.
+    let mut p: Vec<f32> = vec![0.0f32; MODES_PREAMBLE_SAMPLES];
+
+    for x in 0..buffer.len() / mul - MODES_PREAMBLE_SAMPLES - MODES_LONG_MSG_SAMPLES {
+        let mut w_lms = vec![Complex::new(0.0f32, 0.0f32); streams];
+
+        for i in 0..constants::MODES_PREAMBLE_SAMPLES {
+            let soi_sample = soi[i];
+            let mut sum = Complex::new(0.0f32, 0.0f32);
+            
+            // Apply the weights and get the result. Do the beamforming operation.
+            for y in 0..streams {
+                sum += w_lms[y].conj() * iq[y][x + i];
+            }
+
+            // Take the difference between what we were supposed to get and what we got.
+            let error = soi_sample - sum;
+            
+            // Apply the error to the original samples and apply part of that to the weights
+            // in an incremental fashion.
+            for y in 0..streams {
+                w_lms[y] += mu * error.conj() * iq[y][x + i];
+            }
+        }
+
+        let snr: f32;
+
+        if check_preamble {
+            for i in 0..constants::MODES_PREAMBLE_SAMPLES {
+                let mut sum = Complex::new(0.0f32, 0.0f32);
+                
+                // Apply the final weights we got to the sample stream one sample at a time.
+                for y in 0..streams {
+                    sum += w_lms[y].conj() * iq[y][x + i];
+                }
+
+                p[i] = sum.norm();
+            }
+
+            let valid: bool = (p[0] > p[1]) && (p[1] < p[2]) && (p[2] > p[3]) && (p[3] < p[0]) && 
+                            (p[4] < p[0]) && (p[5] < p[0]) && (p[6] < p[0]) && (p[7] > p[8]) &&
+                            (p[8] < p[9]) && (p[9] > p[6]);
+            if !valid {
+                continue;
+            }
+
+            let high: f32 = (p[0] + p[2] + p[7] + p[9]) / 6.0f32;
+
+            if (p[4] >= high) || (p[5] >= high) {
+                continue;
+            }
+
+            if (p[11] > high) || (p[12] > high) || (p[13] > high) || (p[14] > high) {
+                continue;
+            }
+
+            snr = (p[0] - p[1]) + (p[2] - p[3]) + (p[7] - p[6]) + (p[9] - p[8]);            
+        } else {
+            snr = 0.0;
+        }
+
+        for i in 0..constants::MODES_LONG_MSG_SAMPLES {
+            let mut sum = Complex::new(0.0f32, 0.0f32);
+            
+            // Apply the final weights we got to the sample stream one sample at a time.
+            for y in 0..streams {
+                sum += w_lms[y].conj() * iq[y][x + constants::MODES_PREAMBLE_SAMPLES + i];
+            }
+
+            // The output of the beamformer equation.
+            samples[i] = sum.norm();
+        }
+
+        // Process the samples as if they contain a message.
+
+        let mut thebyte: u8 = 0;
+        let mut msg: Vec<u8> = Vec::new();
+
+        for y in 0..samples.len() / 2 {
+            let a: f32 = samples[y * 2 + 0];
+            let b: f32 = samples[y * 2 + 1];
+
+            if a > b {
+                thebyte |= 1;
+            }
+
+            if y & 7 == 7 {
+                msg.push(thebyte);
+            }
+
+            thebyte = thebyte << 1;            
+        }
+
+        match decode::process_result(
+            ProcessStreamResult {
+                snr: snr,
+                msg: msg,
+                samples: Vec::new(),
+                ndx: x,
+                thetas: Vec::new(),
+                amplitudes: Vec::new(),
+                pipe_ndx: 0,
+            },
+            bit_error_table,
+            seen
+        ) {
+            Ok(message) => {
+                messages.push(message);
+            },
+            Err(_) => (),
+        }
+    }
+
+    messages
+}
+
 fn main() {
-    let args = Args::parse();
-
-    let thread_count: u32 = args.thread_count;
-    let cycle_count: u32 = args.cycle_count;
-
     println!("Hello, world!");
 
-    println!("Using {} threads and {} cycles.", thread_count, cycle_count);
+    let args = Args::parse();
+
+    let use_lms;
+    let thread_count: u32 = args.thread_count;
+    let cycle_count: u32 = match args.cycle_count {
+        Some(v) => {
+            use_lms = false;
+            v
+        },
+        None => {
+            use_lms = true;
+            1
+        },
+    };
+
+    if use_lms {
+        println!("Using LMS beamformer.");
+        println!("Using {} threads.", thread_count);
+    } else {
+        println!("Using random beamformer.");
+        println!("Using {} threads and {} cycles.", thread_count, cycle_count);
+    }
 
     let mut pipe_mgmt = PipeManagement::new(thread_count as usize, cycle_count as usize);
 
@@ -215,7 +395,6 @@ fn main() {
         let base_pipe_ndx: usize = x * cycle_count as usize;
 
         thread::spawn(move || {
-            println!("spawned");
             let bit_error_table = crc::modes_init_error_info();
             let mut pipe_theta: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
             let mut pipe_amps: Vec<Option<Vec<f32>>> = vec![None; cycle_count as usize];
@@ -244,6 +423,16 @@ fn main() {
                     ThreadTxMessage::UnsetWeights(pipe_ndx) => {
                         pipe_theta[pipe_ndx] = None;
                         pipe_amps[pipe_ndx] = None;
+                    },
+                    ThreadTxMessage::LMSWork(buffer, streams) => {
+                        btx.send(process_stream_lms(
+                            &buffer,
+                            streams,
+                            &bit_error_table,
+                            &seen_thread,
+                            args.mu,
+                            args.check_preamble
+                        )).unwrap();
                     },
                 }
             }
@@ -334,6 +523,10 @@ fn main() {
     match args.ula_spacing_wavelength {
         None => (),
         Some(spacing) => {
+            if use_lms {
+                panic!("--ula-spacing-wavelength is incompatible with LMS beamformer. LMS is toggled by not specifying --cycle-count.");
+            }
+
             // `spacing` is the distance of each element from the other element in wavelengths
             let total_pipes = thread_count * cycle_count;
 
@@ -380,43 +573,72 @@ fn main() {
                 let start = Instant::now();
 
                 let mut hm: HashMap<u64, Message> = HashMap::new();
-                
-                pipe_mgmt.send_buffer_to_all(&buffer, streams);
 
-                //println!("getting data from threads");
-                for rx in &rxs {
-                    //println!("reading from one thread");
-                    for message in rx.recv().unwrap() {
-                        // We are highly likely to get the same message from multiple
-                        // threads. We should take the highest SNR of any duplicates.
-                        match hm.get(&message.common.ndx) {
-                            Some(other) => {
-                                // Compare the SNR (signal to noise) ratio
-                                // and replace the existing if better.
-                                if other.common.snr < message.common.snr {
-                                    hm.insert(message.common.ndx, message);    
-                                }
-                            },
-                            None => {
-                                // This was the first time we saw a message at
-                                // this `message.ndx` (index) in the sample
-                                // stream.
-                                hm.insert(message.common.ndx, message);
-                            },
+                let mut items: Vec<(u64, Message)>;
+
+                if !use_lms {
+                    pipe_mgmt.send_buffer_to_all(&buffer, streams);
+
+                    //println!("getting data from threads");
+                    for rx in &rxs {
+                        //println!("reading from one thread");
+                        for message in rx.recv().unwrap() {
+                            // We are highly likely to get the same message from multiple
+                            // threads. We should take the highest SNR of any duplicates.
+                            match hm.get(&message.common.ndx) {
+                                Some(other) => {
+                                    // Compare the SNR (signal to noise) ratio
+                                    // and replace the existing if better.
+                                    if other.common.snr < message.common.snr {
+                                        hm.insert(message.common.ndx, message);    
+                                    }
+                                },
+                                None => {
+                                    // This was the first time we saw a message at
+                                    // this `message.ndx` (index) in the sample
+                                    // stream.
+                                    hm.insert(message.common.ndx, message);
+                                },
+                            }
+                        }
+                    }
+
+                    items = hm.into_iter().collect();
+                    // They might be out of order so sort them to ensure they are ordered.
+                    items.sort_by(|a, b| (&a.0).cmp(&b.0));
+                } else {
+                    items = Vec::new();
+
+                    let bytes_per_strip = 4 * streams;
+                    let sample_count = buffer.len() / bytes_per_strip;
+                    let chunk_size: usize = sample_count / thread_count as usize;
+                    let rem: usize = sample_count % thread_count as usize;
+                    
+                    for i in 0..thread_count as usize - 1 {
+                        let chunk_slice: &[u8] = &buffer[i * chunk_size * bytes_per_strip..(i * chunk_size + chunk_size + MODES_LONG_MSG_SAMPLES) * bytes_per_strip];
+                        let chunk: Vec<u8> = chunk_slice.to_vec();
+                        pipe_mgmt.send_lms_work_to_thread(i, chunk, streams);
+                    }
+
+                    let i = thread_count as usize - 1;
+                    let chunk_slice = &buffer[i * chunk_size * bytes_per_strip..(i * chunk_size + chunk_size + rem) * bytes_per_strip];
+                    let chunk: Vec<u8> = chunk_slice.to_vec();
+                    pipe_mgmt.send_lms_work_to_thread(i, chunk, streams);
+
+                    for i in 0..thread_count as usize {
+                        let msgs = rxs[i].recv().unwrap();
+                        for mut msg in msgs {
+                            items.push((msg.common.ndx, msg));
                         }
                     }
                 }
 
-                let mut items: Vec<(u64, Message)> = hm.into_iter().collect();
-                // They might be out of order so sort them to ensure they are ordered.
-                items.sort_by(|a, b| (&a.0).cmp(&b.0));
-                
                 // Update all indices to be global offsets. They come as offsets
                 // into the buffer but since we track the total offset across all
                 // buffers add them with the base `sample_index`.
                 for (_, message) in &mut items {
                     message.common.ndx += sample_index;
-                }
+                }                
 
                 for (_, message) in &items {
                     match message.specific {

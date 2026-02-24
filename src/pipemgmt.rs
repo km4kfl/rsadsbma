@@ -121,6 +121,10 @@ impl PipeManagement {
             tx.send(ThreadTxMessage::Buffer(buffer.clone(), streams)).unwrap();
         }
     }
+
+    pub fn send_lms_work_to_thread(&self, thread_ndx: usize, buffer: Vec<u8>, streams: usize) {
+        self.txs[thread_ndx].send(ThreadTxMessage::LMSWork(buffer, streams));
+    }
     
     /// Used when this structure is first created.
     pub fn push_tx(&mut self, sender: Sender<ThreadTxMessage>) {
@@ -139,4 +143,6 @@ pub enum ThreadTxMessage {
     SetWeights(usize, Vec<f32>, Option<Vec<f32>>),
     /// Used to revert a pipe back to a value that is randomly choosen per buffer process operation.
     UnsetWeights(usize),
+    /// Used to send work for the LMS beamformer.
+    LMSWork(Vec<u8>, usize),
 }
