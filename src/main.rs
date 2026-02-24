@@ -375,7 +375,11 @@ fn main() {
         println!("Using LMS beamformer.");
         println!("Using {} threads.", thread_count);
     } else {
-        println!("Using random beamformer.");
+        match args.ula_spacing_wavelength {
+            None => println!("Using random beamformer."),
+            Some(_) => println!("Using ULA scanned traditional sum and delay."),
+        }
+        
         println!("Using {} threads and {} cycles.", thread_count, cycle_count);
     }
 
