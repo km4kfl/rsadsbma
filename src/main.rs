@@ -380,7 +380,7 @@ fn main() {
             Some(_) => println!("Using ULA scanned traditional sum and delay."),
         }
         
-        println!("Using {} threads and {} cycles.", thread_count, cycle_count);
+        println!("Using {} threads and {} cycles for a total of {} beams/antenna-patterns.", thread_count, cycle_count, thread_count * cycle_count);
     }
 
     let mut pipe_mgmt = PipeManagement::new(thread_count as usize, cycle_count as usize);
