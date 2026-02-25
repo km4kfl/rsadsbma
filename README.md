@@ -4,6 +4,9 @@ This project demodulates, partially decodes, and does CRC checking. It allows on
 use it to track these aircraft. It enables you to also use dump1090, another project, which provides
 a real-time map. See the section Map for more information.
 
+_The project is designed around the BladeSDR but is not limited to it's use. However, using another
+board will require one to rewrite the frontend Python scripts and provide a compatible sample stream._
+
 The purpose of this project was not to replace the many others but to do some experimenting with
 beamforming which is where the signals from two or more antennas, part of an array, are mixed 
 together to form directivity. The directivity allows software to aim at different parts of the sky
