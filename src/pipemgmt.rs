@@ -15,8 +15,6 @@ pub struct PipeManagement {
     addr_to_pipe: HashMap<u32, (usize, usize)>,
     /// Maps each pipe to a transponder address or u32.
     pipe_to_addr: Vec<Option<u32>>,
-    /// The total number of threads.
-    thread_count: usize,
     /// The total number of pipes per thread.
     pipe_count: usize,
 }
@@ -30,7 +28,6 @@ impl PipeManagement {
             txs: Vec::new(),
             addr_to_pipe: HashMap::new(),
             pipe_to_addr: vec![None; thread_count * pipe_count],
-            thread_count: thread_count,
             pipe_count: pipe_count,
         }
     }
@@ -123,7 +120,7 @@ impl PipeManagement {
     }
 
     pub fn send_lms_work_to_thread(&self, thread_ndx: usize, buffer: Vec<u8>, streams: usize) {
-        self.txs[thread_ndx].send(ThreadTxMessage::LMSWork(buffer, streams));
+        self.txs[thread_ndx].send(ThreadTxMessage::LMSWork(buffer, streams)).unwrap();
     }
     
     /// Used when this structure is first created.

@@ -14,6 +14,7 @@ use std::fmt;
 /// samples, amplitudes of each antenna, and if the CRC was okay for the
 /// message.
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct MessageCommon {
     /// The bytes that comprise the message after demodulation.
     pub msg: Vec<u8>,
@@ -42,6 +43,7 @@ impl fmt::Debug for MessageCommon {
 
 /// Represents a message after demodulation and decoding.
 #[derive(Debug)]
+#[derive(Clone)]
 pub struct Message {
     pub common: MessageCommon,
     /// Any data specific to this message. For example, this
@@ -52,6 +54,7 @@ pub struct Message {
 /// Elements that are common to a few different specific message types.
 #[derive(Debug)]
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct DfHeader1 {
     pub capability: u8,
     /// The transponder address.
@@ -67,6 +70,7 @@ pub struct DfHeader1 {
 /// decoding was done on the message. You could put fields
 /// specific to each message type here.
 #[derive(Debug)]
+#[derive(Clone)]
 pub enum MessageSpecific {
     #[allow(dead_code)]
     AircraftIdenAndCat {

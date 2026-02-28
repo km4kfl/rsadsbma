@@ -12,11 +12,11 @@
 
 use std::sync::{Arc, Mutex};
 use std::io::Read;
-use std::net::TcpStream;
+use std::net::{TcpStream, TcpListener};
 use bytemuck::bytes_of;
 use std::time::{Duration, Instant};
 use std::thread;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::collections::HashMap;
 use clap::Parser;
 use std::fs::File;
@@ -140,6 +140,10 @@ struct Args {
     #[arg(short, long)]
     #[clap(default_value_t = false)]
     check_preamble: bool,
+
+    /// The address:port to listen for BEAST connections. For example "localhost:35005".
+    #[arg(long)]
+    bo_bind: Option<String>,
 }
 
 /// Supports `InputMultiplexor`.
@@ -215,7 +219,7 @@ fn process_stream_lms(
     let mut iq: Vec<Vec<Complex<f32>>> = Vec::new();
     let mut messages: Vec<Message> = Vec::new();
 
-    for x in 0..streams {
+    for _ in 0..streams {
         iq.push(Vec::new());
     }
 
@@ -353,6 +357,52 @@ fn process_stream_lms(
     messages
 }
 
+/// Handles a single BEAST port connection.
+fn handle_beast_connection(mut stream: TcpStream, rx: Receiver<Message>) {
+    loop {
+        let msg = rx.recv().unwrap();
+        let mut buf: Vec<u8> = Vec::new();
+        //buf.push(0x1a);
+        match msg.common.msg.len() {
+            constants::MODES_LONG_MSG_BYTES => buf.push(51),    // '3'
+            constants::MODES_SHORT_MSG_BYTES => buf.push(50),   // '2'
+            _ => continue,
+        }
+        let ndx = msg.common.ndx;
+        //buf.push((ndx >> 56) as u8);
+        //buf.push((ndx >> 48) as u8);
+        buf.push((ndx >> 40) as u8);
+        buf.push((ndx >> 32) as u8);
+        buf.push((ndx >> 24) as u8);
+        buf.push((ndx >> 16) as u8);
+        buf.push((ndx >> 8) as u8);
+        buf.push(ndx as u8);
+
+        let snr = msg.common.snr;
+
+        buf.push(0);
+
+        let bytes = msg.common.msg;
+
+        for x in 0..bytes.len() {
+            buf.push(bytes[x]);
+        }
+
+        let mut buf2: Vec<u8> = Vec::new();
+
+        buf2.push(0x1a);
+
+        for x in 0..buf.len() {
+            buf2.push(buf[x]);
+            if buf[x] == 0x1a {
+                buf2.push(0x1a);
+            }
+        }
+
+        stream.write(&buf2).unwrap();
+    }
+}
+
 fn main() {
     println!("Hello, world!");
 
@@ -462,8 +512,6 @@ fn main() {
     let mut stat_apm: u64 = 0;
     let mut stat_avm: u64 = 0;
     let mut stat_avms: u64 = 0;
-    let mut stat_mes: u64 = 0;
-    let mut stat_mu: u64 = 0;
     let mut stat_start = Instant::now();
     let stat_gstart = Instant::now();
 
@@ -561,6 +609,74 @@ fn main() {
         },
     }
 
+    let (clients_new_tx, clients_new_rx) = channel();
+
+    thread::spawn(move || {
+        // listen on BEAST port and hand clients to a new thread
+        let l = TcpListener::bind(match args.bo_bind {
+            Some(v) => v,
+            None => "localhost:35005".to_string(),
+        }).unwrap();
+        for stream in l.incoming() {
+            let stream = stream.unwrap();
+            let (client_tx, client_rx) = channel::<Message>();
+            clients_new_tx.send(client_tx).unwrap();
+            thread::spawn(move || {
+                println!("new client");
+                handle_beast_connection(stream, client_rx);
+            });
+        }
+    });
+
+    let (beast_tx, beast_rx) = channel::<Message>();
+
+    // This handles taking incoming messages and passing them to all
+    // the avaliable clients. Each client processes the message which
+    // happens above inside `handle_beast_connection`.
+    thread::spawn(move || {
+        let mut clients: Vec<Sender<Message>> = Vec::new();
+
+        loop {
+            // get msg packet
+            let msg = beast_rx.recv().unwrap();
+            
+            // This pulls new client Sender<Message> objects
+            // and appends them to our client list. It will
+            // not block. It exits the loop if no new clients
+            // exist.
+            loop {
+                match clients_new_rx.try_recv() {
+                    Ok(new_rx) => {
+                        clients.push(new_rx);
+                    },
+                    Err(_) => break,
+                }
+            }
+            let mut to_remove: Vec<usize> = Vec::new();
+
+            for x in 0..clients.len() {
+                match clients[x].send(msg.clone()) {
+                    Ok(_) => (),
+                    Err(_) => {
+                        // If a client thread exited then remove
+                        // it from the list to drop its Sender<Message>.
+                        println!("dropping client {}", x);
+                        to_remove.push(x);
+                    },
+                }
+            }
+
+            // Remove any dropped clients backwards since each
+            // remove shifts the list to the left. We shouldn't
+            // have that many clients so this should be fast and
+            // if the day arrives there are many clients then 
+            // this whole code section can be optimized.
+            for x in 0..to_remove.len() {
+                let y = to_remove.len() - 1 - x;
+                clients.remove(to_remove[y]);
+            }
+        }
+    });
 
     println!("working with {} streams", streams);
 
@@ -632,7 +748,7 @@ fn main() {
 
                     for i in 0..thread_count as usize {
                         let msgs = rxs[i].recv().unwrap();
-                        for mut msg in msgs {
+                        for msg in msgs {
                             items.push((msg.common.ndx, msg));
                         }
                     }
@@ -652,8 +768,6 @@ fn main() {
                         MessageSpecific::AirbornePositionMessage { .. } => stat_apm += 1,
                         MessageSpecific::AirborneVelocityMessage { .. } => stat_avm += 1,
                         MessageSpecific::AirborneVelocityMessageShort { .. } => stat_avms += 1,
-                        MessageSpecific::MilitaryExtendedSquitter { .. } => stat_mes += 1,
-                        MessageSpecific::MilitaryUse { .. } => stat_mu += 1,
                         _ => (),
                     }
 
@@ -690,7 +804,9 @@ fn main() {
                                 },
                             }
                         },
-                    }                            
+                    }
+
+                    beast_tx.send(message.clone()).unwrap();
                 }
 
                 // The message have been demodulated and decoded. Process them to produce
