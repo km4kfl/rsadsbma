@@ -53,7 +53,13 @@ https://rustup.rs/
 
 This allows you to build the beamforming application.
 
-# How
+# Ways to Run
+
+There are three major ways to run the program. You can use the `bladesdr.py` for a single board two antenna setup, `bladesdr4x.py` for a two board four antenna setup, or you can use `--input-source` command line option to read from a sample file.
+
+_Currently, only the `bladesdr4x.py` allows dumping of a file to disk but you can modify `bladesdr.py` to do it if you wanted._
+
+# How (2 Antenna Setup)
 
 First, open a prompt and type `python bladesdr.py --serial 9da --freq-offset 0`. But, replace `9da` with the serial of your BladeRF. If this works it means you have Python 3.x and the BladeRF library installed correctly.
 
