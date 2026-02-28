@@ -1,17 +1,19 @@
 # What Does It Do
 
-This project demodulates, partially decodes, and does CRC checking. It allows one to recieve ADS-B transmission on 1090MHZ. These are transmissions sent by airplanes that fly high in the sky. You can
+This project demodulates, mostly decodes, and does CRC checking. It allows one to recieve ADS-B transmission on 1090MHZ. These are transmissions sent by airplanes that fly high in the sky. You can
 use it to track these aircraft. It enables you to also use dump1090, another project, which provides
 a real-time map. See the section Map for more information.
 
 _The project is designed around the BladeSDR but is not limited to it's use. However, using another
-board will require one to rewrite the frontend Python scripts and provide a compatible sample stream._
+board will require one to write new frontend Python scripts and provide a compatible sample stream._
 
 The purpose of this project was not to replace the many others but to do some experimenting with
 beamforming which is where the signals from two or more antennas, part of an array, are mixed 
 together to form directivity. The directivity allows software to aim at different parts of the sky
 for improved SNR and when it works well allows one to find, demodulate, and decode messages that
 would have otherwise been lost to a single antenna system.
+
+# Other Projects
 
 Here are some other projects which are more full featured.
 
@@ -41,18 +43,25 @@ You need Python 3.x, BladeRF library, and Rustup installed.
 
 https://www.python.org/downloads/
 
+You need Python 3.x for the frontend scripts.
+
 https://www.nuand.com/
+
+This is the BladeSDR library. There is a installer for Windows and you can build the library from the linux source.
 
 https://rustup.rs/
 
+This allows you to build the beamforming application.
+
 # How
 
-First, open a prompt and type `python bladesdr.py --serial 9da --freq-offset 0`. But, replace `9da` with the serial of your BladeRF. If this works it means
-you have Python 3.x and the BladeRF library installed correctly.
+First, open a prompt and type `python bladesdr.py --serial 9da --freq-offset 0`. But, replace `9da` with the serial of your BladeRF. If this works it means you have Python 3.x and the BladeRF library installed correctly.
 
-Next, open a prompt and type `cargo run --release -- --thread-count 16 --cycle-count 20`. At first, it will build the libraries and the application. However, change `--thread-count` to be a number equal to the number of cores you have in the system! Also, you may have to adjust `--cycle-count`.
+Next, open a prompt and type `cargo run --release -- --thread-count 16 --cycle-count 20`. At first, it will build the libraries and the application. _Note!. Change `--thread-count` to be a number equal to the number of cores you have in the system!_ Also, you may have to adjust `--cycle-count` depending on your processor. Try `--cycle-count 3` to `--cycle-count 15` until your not getting a warning.
 
 Finally, you should see messages about elapsed and buffer time. If it says `TOO SLOW` reduce the `--cycle-count`. At 5 second intervals it will print the statistics.
+
+_Don't forget you can use dump1090 for a map. See the section below for more information._
 
 # Antenna Placement
 
@@ -88,8 +97,7 @@ boards together. Then of course, you need your antennas setup which will be four
 
 Then you run `bladesdr4x.py`. This will require two serial numbers since you need two boards. Pick one to be the master and the other the slave. The master should be the one with the cable connected to `CLKOUT` and the slave the one with the cable connected to `CLKIN`.
 
-To find pin `J51[1]` first turn the board so the stenciled lettering is oriented where you can read it. Now,
-look for the JTAG connector. The JTAG connector is ten pins oriented in two rows of five pins each. The `J51` connector is right above it and above it you will see the tiny letters J51. The first pin is on the left side and that is `J51[1]`. You can use any wire. I liked the little jumper wires that have a female end that fits nicely over the pin. You link both of these pins on both cards. This is the trigger pin. The master toggles the pin and this tells both cards to start streaming at the same instant. Well, it's close to the same instant but not perfect because obviously the electrical signal has a propogation speed.
+To find pin `J51[1]` first turn the board so the stenciled lettering is oriented where you can read it. Now, look for the JTAG connector. The JTAG connector is ten pins oriented in two rows of five pins each. The `J51` connector is right above it and above it you will see the tiny letters J51. The first pin is on the left side and that is `J51[1]`. You can use any wire. I liked the little jumper wires that have a female end that fits nicely over the pin. You link both of these pins on both cards. This is the trigger pin. The master toggles the pin and this tells both cards to start streaming at the same instant. Well, it's close to the same instant but not perfect because obviously the electrical signal has a propogation speed.
 
 If you are looking for the `CLKIN` (clock in) and `CLKOUT` (clock out). Hold the board the same way and look near the top center and they are beside each other. Make sure the master is `CLKOUT` because the program is going to configure it to output the clock signal and the slave will be configured to read the clock signal.
 
@@ -99,11 +107,12 @@ https://www.nuand.com/libbladeRF-doc/v2.5.0/group___f_n___b_l_a_d_e_r_f2___l_o_w
 
 # ULA Mode
 
-It supports a uniform linear array (ULA) mode with the command line option `--ula-spacing-wavelength`. This activates the mode
-when used and it treats the antennas if they are an array with the same spacing between each element. The argument to this
-command line option is the wavelength of the spacing. For example, if you antennas are spaced at half a wavelength then the
-value would be `0.5`. You will have to calculate the wavelength by hand into meters with `300e6 / 1090e6` then if you wanted
-a half wavelength spacing you could do `300e6 / 1090e6 * 0.5` which would give you the distance the elements need to be spaced
-at half a wavelength in meters. The `0.5` is the wavelength spacing argument for `--ula-spacing-wavelength`.
+It supports a uniform linear array (ULA) mode with the command line option `--ula-spacing-wavelength`. This activates the mode when used and it treats the antennas if they are an array with the same spacing between each element. The argument to this command line option is the wavelength of the spacing. For example, if you antennas are spaced at half a wavelength then the value would be `0.5`. You will have to calculate the wavelength by hand into meters with `300e6 / 1090e6` then if you wanted a half wavelength spacing you could do `300e6 / 1090e6 * 0.5` which would give you the distance the elements need to be spaced at half a wavelength in meters. The `0.5` is the wavelength spacing argument for `--ula-spacing-wavelength`.
 
 This mode is in contrast to the default random mode where the antenna weights are randomly selected.
+
+I've had limited success with this mode. It works but random so far has outperformed it.
+
+# LMS Mode
+
+If you omit the `--cycle-count` on the command line the program uses the LMS beamformer. This is an alternative beamformer to the random or ULA modes. It performs decently but currently can be outperformed with the random beamformer.
